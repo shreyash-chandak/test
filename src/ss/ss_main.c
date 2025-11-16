@@ -1,20 +1,18 @@
 #include "protocol.h"
 #include "utils.h"
 #include "ss_structs.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include "common.h"
 #include "ss_file_ops.h"
+#include "ss_write_helpers.h" // <-- NEW INCLUDE
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <errno.h>
+#include "ss_handler.h"
 
-
+// Prototypes for local functions
 void handle_nm_request(StorageServerState* state, int nm_sock, MsgHeader* header, MsgPayload* payload);
-void handle_client_request(StorageServerState* state, int client_sock, MsgHeader* header, MsgPayload* payload);
-void* handle_client_connection(void* arg); 
+void* handle_client_connection(void* arg);
 
 // -----------------------------------------------------------------
 
@@ -27,34 +25,47 @@ typedef struct {
 // Global state for the Storage Server
 StorageServerState server_state;
 
-// --- NEW HELPER FOR SYNCING FILES ---
-// Callback struct for iterating the map
 typedef struct {
     int nm_socket;
     uint32_t ss_id;
+    StorageServerState* state;
+    //BRUH
 } SyncFileArgs;
 
 // Callback function to send one file's info
 static void sync_file_to_nm_callback(const char* key, void* value, void* arg) {
     SyncFileArgs* args = (SyncFileArgs*)arg;
     const char* filename = key;
-    
+    StorageServerState* state = args->state;
+
+    char file_path[MAX_PATH_LEN];
+    snprintf(file_path, MAX_PATH_LEN, "%s/%s", state->data_dir, filename);
+
+    struct stat st;
+    uint64_t file_size = 0;
+    if (stat(file_path, &st) == 0) {
+        file_size = (uint64_t)st.st_size;
+    } 
+    else {
+        safe_printf("SS %u: Could not stat file '%s' for filesize in SS\n", args->ss_id, filename);
+    }
+
     MsgHeader header = {0};
     MsgPayload payload = {0};
 
     header.version = PROTOCOL_VERSION;
     header.opcode = OP_SS_SYNC_FILE_INFO;
     header.client_id = args->ss_id; // Identify ourselves
-    header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-    strncpy(payload.file_req.filename, filename, MAX_FILENAME_LEN - 1);
-    
+    header.length = sizeof(MsgHeader) + sizeof(Payload_SSSyncFile);
+    strncpy(payload.ss_sync.filename, filename, MAX_FILENAME_LEN - 1);
+    payload.ss_sync.file_size = file_size;
+
     safe_printf("SS %u: Syncing file '%s' with NM.\n", args->ss_id, filename);
     if (send_message(args->nm_socket, &header, &payload) == -1) {
         safe_printf("SS %u: Failed to sync file '%s' to NM.\n", args->ss_id, filename);
-        // We'll just continue, maybe the connection is dead
     }
 }
-// --- END NEW HELPER ---
+
 
 // Thread to handle this SS's *server* part (listening for clients)
 void* run_client_server(void* arg) {
@@ -174,6 +185,7 @@ void* run_nm_client(void* arg) {
     SyncFileArgs sync_args;
     sync_args.nm_socket = state->nm_socket_fd;
     sync_args.ss_id = state->ss_id;
+    sync_args.state = state;
     
     // Iterate our map and call the sync callback for each file
     ts_hashmap_iterate(state->file_lock_map, sync_file_to_nm_callback, &sync_args);
@@ -212,7 +224,7 @@ int main(int argc, char const *argv[]) {
     // This call is now valid because the prototype matches
     init_ss_state(&server_state, data_dir, nm_ip, nm_port, client_port, public_ip);
     
-    safe_printf("--- Docs++ Storage Server v%u Starting ---\n", PROTOCOL_VERSION);
+    safe_printf("─── Docs++ Storage Server v%u Starting ───\n", PROTOCOL_VERSION);
 
     pthread_t nm_thread_id, server_thread_id;
 
@@ -233,36 +245,3 @@ int main(int argc, char const *argv[]) {
     destroy_printf_mutex();
     return 0;
 }
-
-// --- THIS IS THE *REAL* CLIENT HANDLER THREAD ---
-void* handle_client_connection(void* arg) {
-    ThreadArgs* args = (ThreadArgs*)arg;
-    int sock = args->socket_fd;
-    StorageServerState* state = args->state;
-    free(arg);
-
-    safe_printf("SS: Handling new client connection on socket %d\n", sock);
-
-    MsgHeader header;
-    MsgPayload payload;
-
-    // A client connection should be short.
-    // They send ONE request (or one sequence for WRITE).
-    // We expect their *first* message to be the command.
-    if (recv_message(sock, &header, &payload) <= 0) {
-        safe_printf("SS: Client on socket %d disconnected before sending command.\n", sock);
-        close(sock);
-        return NULL;
-    }
-
-    // Route it to the real client handler
-    handle_client_request(state, sock, &header, &payload);
-    
-    // The handler is responsible for the rest of the
-    // connection lifetime (e.g., READ loops, WRITE loops).
-    // For now, it just closes the socket.
-    
-    safe_printf("SS: Closing client connection on socket %d\n", sock);
-    return NULL;
-}
-

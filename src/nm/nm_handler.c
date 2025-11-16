@@ -3,11 +3,33 @@
 #include "utils.h"
 #include "nm_structs.h"
 #include "common.h"
-#include "nm_state.h" // <-- Ensures we have the new function prototypes
+#include "nm_state.h"
 #include "nm_request_helpers.h"
+#include "nm_request_helpers2.h"
+#include "nm_persistence.h"
+#include "nm_bonus.h"
+#include "lru_cache.h" // <-- ADD THIS INCLUDE
 
-void handle_ss_sync_file(uint32_t ss_id, MsgHeader* header, 
-                         Payload_FileRequest* payload, NameServerState* state);
+/**
+ * @brief Gets file metadata, using the LRU cache.
+ * Fetches from main map and populates cache on miss.
+ */
+static FileMetadata* get_metadata_with_cache(NameServerState* state, const char* filename) {
+    // 1. Check cache first
+    FileMetadata* meta = (FileMetadata*)lru_cache_get(state->file_cache, filename);
+    
+    if (meta == NULL) {
+        // 2. Cache miss: Get from main map
+        meta = (FileMetadata*)ts_hashmap_get(state->file_metadata_map, filename);
+        
+        if (meta != NULL) {
+            // 3. Found in main map: Add to cache
+            lru_cache_put(state->file_cache, filename, meta);
+        }
+    }
+    // 'meta' is either the cached/found pointer, or NULL
+    return meta;
+}
 
 void* handle_connection(void* arg) {
     ThreadArgs* args = (ThreadArgs*)arg;
@@ -149,9 +171,6 @@ void* handle_connection(void* arg) {
     return NULL;
 }
 
-// --- ADD THESE NEW (EMPTY) FUNCTIONS TO nm_handler.c ---
-// We will build these out, one opcode at a time.
-
 /**
  * @brief Main router for all opcodes from a registered CLIENT.
  */
@@ -163,35 +182,222 @@ void route_client_request(uint32_t client_id, int sock, MsgHeader* header,
     switch (header->opcode) {
         // --- P2: NM-Handled Features ---
         case OP_CLIENT_VIEW_REQ:
-            // TODO: handle_view(client_id, sock, header, &payload->client_view_req, state);
-            break;
+            handle_view(client_id, sock, &payload->client_view_req, state);
+        break;
+            
         case OP_CLIENT_CREATE_REQ:
             handle_create(client_id, sock, header, &payload->file_req, state);
             break;
-        case OP_CLIENT_DELETE_REQ:
-            // TODO: handle_delete(client_id, sock, header, &payload->file_req, state);
+        case OP_CLIENT_DELETE_REQ:{ 
+            
+            // 1. Get the payload
+            Payload_FileRequest* req = &payload->file_req; 
+
+            // 2. Get parameters: meta and username
+            FileMetadata* meta = get_metadata_with_cache(state, req->filename);
+            const char* username = get_username_from_id(state, client_id);
+
+            // 3. Check for NULLs
+            if (meta == NULL) {
+                send_nm_error(sock, ERR_FILE_NOT_FOUND, "File not found.");
+                break;
+            }
+            if (username == NULL) {
+                send_nm_error(sock, ERR_UNKNOWN, "Internal server error: Client session not found.");
+                break;
+            }
+            if (strcmp(username, meta->owner_username) != 0) {
+                send_nm_error(sock, ERR_ACCESS_DENIED, "Access denied: Only the file owner can delete this file.");
+                break;
+            }
+
+            // If check passes, proceed to the original handler
+            handle_delete(client_id, sock, &payload->file_req, state);
             break;
-        case OP_CLIENT_INFO_REQ:
-            // TODO: handle_info(client_id, sock, header, &payload->file_req, state);
+        }
+        case OP_CLIENT_INFO_REQ:{
+            
+            Payload_FileRequest* req = &payload->file_req;
+
+            // 2. Get parameters: meta and username
+            FileMetadata* meta = get_metadata_with_cache(state, req->filename);
+            const char* username = get_username_from_id(state, client_id);
+
+            // 3. Check for NULLs
+            if (meta == NULL) {
+                send_nm_error(sock, ERR_FILE_NOT_FOUND, "File not found.");
+                break;
+            }
+            if (username == NULL) {
+                send_nm_error(sock, ERR_UNKNOWN, "Internal server error: Client session not found.");
+                break;
+            }
+
+            // 4. Get parameters: required_level (INFO needs READ)
+            PermissionLevel required_perm = PERM_READ;
+
+            // 5. Call the check
+            if (!check_access(meta, username, required_perm)) {
+                send_nm_error(sock, ERR_ACCESS_DENIED, "Access denied: You do not have permission to view this file.");
+                break;
+            }
+            
+            handle_info(client_id, sock, &payload->file_req, state);
             break;
+        }
+
         case OP_CLIENT_LIST_REQ:
             handle_list(client_id, sock, header, state);
             break;
-        case OP_CLIENT_ACCESS_REQ:
-            // TODO: handle_access(client_id, sock, header, &payload->access_req, state);
+
+        case OP_CLIENT_ACCESS_REQ: {
+            Payload_ClientAccessReq* req = &payload->access_req; 
+            MsgHeader res_header = {0};
+
+            // --- Prepare Response Header ---
+            res_header.version = PROTOCOL_VERSION;
+            res_header.opcode = OP_NM_ACCESS_RES; 
+            res_header.length = sizeof(MsgHeader); 
+            res_header.error = ERR_NONE;
+
+            // 1. Get the file's metadata
+            FileMetadata* meta = get_metadata_with_cache(state, req->filename);
+
+            if (meta == NULL) {
+                send_nm_error(sock, ERR_FILE_NOT_FOUND, "File not found.");
+                break;
+            }
+
+            // 2. Permission Check: Get client's username
+            
+            const char* client_username = get_username_from_id(state, client_id);
+
+            if (client_username == NULL) {
+                send_nm_error(sock, ERR_UNKNOWN, "Internal server error: Client ID not found.");
+                break;
+            }
+            
+            // Only the owner can change permissions 
+            if (strcmp(client_username, meta->owner_username) != 0) {
+                send_nm_error(sock, ERR_ACCESS_DENIED, "Access denied: Only the file owner can change permissions.");
+                break;
+            }
+            if (ts_hashmap_get(state->client_username_map, req->username) == NULL) { 
+                send_nm_error(sock, ERR_USER_NOT_FOUND, "User not found: The specified user does not exist.");
+                break;
+            }
+            if(req->flags & ACCESS_FLAG_REMOVE && (strcmp(req->username, meta->owner_username) == 0)) {
+                send_nm_error(sock, ERR_INVALID_COMMAND, "Invalid operation.\nLMAO cope harder. you cannot kick yourself out of the file.");
+                break;
+            }
+            if (strcmp(req->username, meta->owner_username) == 0) {
+                send_nm_error(sock, ERR_INVALID_COMMAND, "Cannot modify the owner's access permissions.");
+                break;
+            }
+
+            // 3. Lock the file's metadata to safely modify its ACL
+            pthread_mutex_lock(&meta->meta_lock);
+
+            if (req->flags & (ACCESS_FLAG_READ_ADD | ACCESS_FLAG_WRITE_ADD)) { 
+                // --- ADD/UPDATE Access ---
+                const char* level = (req->flags & ACCESS_FLAG_WRITE_ADD) ? "RW" : "R";
+                char* level_str_alloc = strdup(level);
+                if (!level_str_alloc) {
+                    res_header.error = ERR_UNKNOWN; // Out of memory
+                } else {
+                    // Log the change
+                    persistence_log_op("META,ADDACCESS,%s,%s,%s\n", 
+                                       req->filename, req->username, level); 
+                    
+                    // Remove old permission string to prevent leak
+                    void* old_level = ts_hashmap_remove(meta->access_list, req->username); 
+                    if (old_level) {
+                        free(old_level);
+                    }
+                    
+                    // Add the new permission
+                    ts_hashmap_put(meta->access_list, req->username, (void*)level_str_alloc); 
+                }
+
+            } else if (req->flags & ACCESS_FLAG_REMOVE) { 
+                // --- REMOVE Access ---
+                persistence_log_op("META,REMACCESS,%s,%s\n", 
+                                   req->filename, req->username); 
+                
+                // Remove the permission and free the string
+                void* old_level = ts_hashmap_remove(meta->access_list, req->username); 
+                if (old_level) {
+                    free(old_level);
+                }
+            }
+
+            // 4. Unlock the file's metadata
+            pthread_mutex_unlock(&meta->meta_lock);
+
+            // 5. Send final response (success or error)
+            send_message(sock, &res_header, NULL); 
+            break;
+        }
+
+        case OP_CLIENT_REQACCESS_REQ:
+            handle_reqaccess(client_id, sock, &payload->file_req, state);
+            break;
+        case OP_CLIENT_LISTREQS_REQ:
+            handle_listreqs(client_id, sock, &payload->file_req, state);
+            break;
+        case OP_CLIENT_APPROVE_REQ:
+            handle_approve(client_id, sock, &payload->access_req, state);
             break;
 
         // --- P1: 3-Way Handshake Triggers ---
         case OP_CLIENT_READ_REQ:
         case OP_CLIENT_WRITE_REQ:
         case OP_CLIENT_STREAM_REQ:
-        case OP_CLIENT_UNDO_REQ:
+        case OP_CLIENT_UNDO_REQ: 
+        case OP_CLIENT_REDO_REQ: {
+
+            Payload_FileRequest* req = &payload->file_req;
+
+            // 2. Get parameters: meta and username
+            FileMetadata* meta = get_metadata_with_cache(state, req->filename); 
+            const char* username = get_username_from_id(state, client_id);
+
+            // 3. Check for NULLs
+            if (meta == NULL) {
+                send_nm_error(sock, ERR_FILE_NOT_FOUND, "File not found.");
+                break;
+            }
+            if (username == NULL) {
+                send_nm_error(sock, ERR_UNKNOWN, "Internal server error: Client session not found.");
+                break;
+            }
+
+            // 4. Get parameters: required_level and err_msg
+            PermissionLevel required_perm;
+            const char* err_msg;
+            bool is_write_op = (header->opcode == OP_CLIENT_WRITE_REQ || header->opcode == OP_CLIENT_UNDO_REQ);
+
+            if (is_write_op) {
+                required_perm = PERM_WRITE;
+                err_msg = "Access denied: You do not have permission to write to this file.";
+            } else {
+                required_perm = PERM_READ;
+                err_msg = "Access denied: You do not have permission to read this file.";
+            }
+
+            // 5. Call the check
+            if (!check_access(meta, username, required_perm)) {
+                send_nm_error(sock, ERR_ACCESS_DENIED, err_msg);
+                break;
+            }
+            
             handle_redirect(client_id, sock, header, &payload->file_req, state);
             break;
-
+        }
         // --- P2: Exec ---
         case OP_CLIENT_EXEC_REQ:
-            // TODO: handle_exec(client_id, sock, header, &payload->file_req, state);
+            //safe_printf("DEBUG (NM): Received OP_CLIENT_EXEC_REQ for %s from client %u\n", payload->file_req.filename, client_id);
+            handle_exec(client_id, sock, &payload->file_req, state);
             break;
 
         case OP_HEARTBEAT_PONG:
@@ -205,18 +411,84 @@ void route_client_request(uint32_t client_id, int sock, MsgHeader* header,
     }
 }
 
-/**
- * @brief Main router for all opcodes from a registered SS.
- */
+static void handle_ss_undo_complete(uint32_t ss_id, Payload_SSNMUndoComplete* payload, NameServerState* state) {
+
+    FileMetadata* meta = (FileMetadata*)ts_hashmap_get(state->file_metadata_map, payload->filename); 
+
+    if (meta == NULL) {
+        safe_printf("NM: Received UNDO_COMPLETE for unknown file '%s' from SS %u\n", payload->filename, ss_id);
+        return;
+    }
+    safe_printf("NM: Received UNDO_COMPLETE for file '%s' from SS %u\n", payload->filename, ss_id);
+    pthread_mutex_lock(&meta->meta_lock);
+
+    time_t now = time(NULL);
+
+    // --- FIX: Log the UNDO operation ---
+    persistence_log_op("META,UNDO,%s,%ld,%llu\n",
+                       meta->filename,
+                       (long)now,
+                       (unsigned long long)payload->new_file_size); 
+
+    // An UNDO is a write operation, so update all metadata
+    meta->modified_at = (uint64_t)now;
+    meta->accessed_at = (uint64_t)now;
+    meta->file_size = payload->new_file_size;
+
+    pthread_mutex_unlock(&meta->meta_lock);
+}
+
+static void handle_ss_redo_complete(uint32_t ss_id, Payload_SSNMRedoComplete* payload, NameServerState* state) {
+
+    FileMetadata* meta = (FileMetadata*)ts_hashmap_get(state->file_metadata_map, payload->filename); 
+
+    if (meta == NULL) {
+        safe_printf("NM: Received REDO_COMPLETE for unknown file '%s' from SS %u\n", payload->filename, ss_id);
+        return;
+    }
+    safe_printf("NM: Received REDO_COMPLETE for file '%s' from SS %u\n", payload->filename, ss_id);
+    pthread_mutex_lock(&meta->meta_lock);
+
+    time_t now = time(NULL);
+
+    // --- Log the REDO operation ---
+    persistence_log_op("META,REDO,%s,%ld,%llu", // <-- Note the new log type
+                       meta->filename,
+                       (long)now,
+                       (unsigned long long)payload->new_file_size); 
+
+    // A REDO is a write operation, so update all metadata
+    meta->modified_at = (uint64_t)now;
+    meta->accessed_at = (uint64_t)now;
+    meta->file_size = payload->new_file_size;
+
+    pthread_mutex_unlock(&meta->meta_lock);
+}
+
+// Main router for all opcodes from a registered SS.
+
 void route_ss_request(uint32_t ss_id, int sock, MsgHeader* header, 
-                      MsgPayload* payload, NameServerState* state) {
+                      MsgPayload* payload, NameServerState* state){
 
     safe_printf("NM: Routing SS opcode %u from SS %u\n", header->opcode, ss_id);
 
     switch(header->opcode) {
         case OP_SS_SYNC_FILE_INFO:
-            handle_ss_sync_file(ss_id, header, &payload->file_req, state);
+            handle_ss_sync_file(ss_id, header, &payload->ss_sync, state);
             break;
+
+        case OP_SS_NM_UNDO_COMPLETE:
+            handle_ss_undo_complete(ss_id, &payload->undo_complete, state);
+            break;
+
+        case OP_SS_NM_REDO_COMPLETE: // <-- ADD THIS BLOCK
+            handle_ss_redo_complete(ss_id, &payload->redo_complete, state);
+            break;
+            
+        case OP_SS_NM_WRITE_COMPLETE:
+            handle_ss_write_complete(ss_id, &payload->write_complete, state);
+            break;
+
         case OP_HEARTBEAT_PONG:
             // TODO: handle_ss_pong(ss_id, state);
             break;

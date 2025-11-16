@@ -2,10 +2,7 @@
 #include "protocol.h"
 #include "utils.h"
 #include "client_repl.h"
-// No more client_network.h
 #include "parse_command.h"
-
-// No more nm_disconnected flag
 
 void start_reply(int nm_socket){
     char line[1024];
@@ -14,7 +11,7 @@ void start_reply(int nm_socket){
 
     while (1){
         
-        printf("docs> ");
+        printf("%s%s%s@%sdocs++> %s",BRIGHTBLUE, username, LIGHTRED, YELLOW, COLOR_RESET);
         fflush(stdout);
 
         // --- SIMPLE, BLOCKING FGETS ---
@@ -41,6 +38,10 @@ void start_reply(int nm_socket){
                 continue;
             
             case CMD_EMPTY:
+                continue;
+
+            case CMD_CLEAR:
+                system("clear || cls");
                 continue;
                 
             default:

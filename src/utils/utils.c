@@ -87,6 +87,102 @@ static int recv_all(int sock, void* buffer, size_t length) {
     return 1; // Success
 }
 
+void send_nm_error_response(int sock, uint32_t client_id, OpCode original_opcode, 
+                          ErrorCode error, const char* message) {
+    
+
+    MsgHeader res_header = {0};
+    MsgPayload res_payload = {0};
+
+    res_header.version = PROTOCOL_VERSION;
+    res_header.opcode = OP_ERROR_RES;
+    res_header.length = sizeof(MsgHeader) + sizeof(Payload_Error); 
+    res_header.client_id = client_id; // <-- Use the client_id
+    res_header.error = error;
+    
+    strncpy(res_payload.error.message, message, MAX_ERROR_MSG_LEN - 1);
+    res_payload.error.message[MAX_ERROR_MSG_LEN - 1] = '\0';
+    
+    send_message(sock, &res_header, &res_payload); 
+}
+
+// too lazy to merge these two into the above better function
+
+void send_nm_error(int sock, ErrorCode error, const char* message) {
+    MsgHeader res_header = {0};
+    MsgPayload res_payload = {0};
+
+    res_header.version = PROTOCOL_VERSION;
+    res_header.opcode = OP_ERROR_RES;
+    res_header.error = error;
+    res_header.length = sizeof(MsgHeader) + sizeof(Payload_Error);
+    
+    strncpy(res_payload.error.message, message, MAX_ERROR_MSG_LEN - 1);
+    res_payload.error.message[MAX_ERROR_MSG_LEN - 1] = '\0';
+    
+    send_message(sock, &res_header, &res_payload);
+}
+
+static const char* get_permission_string(FileMetadata* meta, const char* username) {
+    // ts_hashmap_get is thread-safe for reading.
+    return (const char*)ts_hashmap_get(meta->access_list, username);
+}
+
+// The main access control check.
+bool check_access(FileMetadata* meta, const char* username, PermissionLevel required_level) {
+    
+    // 1. Check if they are the owner.
+    // The owner always has both read and write access.
+    if (strcmp(username, meta->owner_username) == 0) {
+        return true;
+    }
+
+    // 2. Look up the *specific user's* permission
+    const char* user_permission = get_permission_string(meta, username);
+
+    // 3. Handle READ requests
+    if (required_level == PERM_READ) {
+        
+        // A. Check if the specific user has R or RW
+        if (user_permission != NULL && (strcmp(user_permission, "R") == 0 || strcmp(user_permission, "RW") == 0)) {
+            return true;
+        }
+        // If user-specific check fails, check for public "everyone" access
+        const char* public_permission = get_permission_string(meta, "unregistered");
+        if (public_permission != NULL && (strcmp(public_permission, "R") == 0 || strcmp(public_permission, "RW") == 0)){
+            return true;
+        }
+        // If both checks fail, deny read
+        return false;
+    }
+
+    // 4. Handle WRITE requests
+    if (required_level == PERM_WRITE) {
+        // "unknown" does NOT grant write access.
+        return (user_permission != NULL && strcmp(user_permission, "RW") == 0);
+    }
+    
+    return false; // Default deny
+}
+
+
+
+const char* get_username_from_id(NameServerState* state, uint32_t client_id) {
+    
+    // Create a string key for the ID
+    char id_key[16];
+    snprintf(id_key, 16, "%u", client_id);
+
+    // Look up in the client_id_map
+    ClientInfo* client = (ClientInfo*)ts_hashmap_get(state->client_id_map, id_key);
+    
+    if (client) {
+        return client->username;
+    }
+    
+    return NULL;
+}
+
 
 /**
  * @brief Main function to send a protocol message.

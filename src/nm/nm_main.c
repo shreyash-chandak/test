@@ -4,6 +4,7 @@
 #include "nm_handler.h"
 #include "common.h"
 #include "nm_state.h"
+#include "nm_persistence.h"
 
 #define NM_PORT 8080
 #define MAX_CONNECTIONS 100
@@ -11,12 +12,23 @@
 // This will be implemented in nm_state.c
 void init_server_state(NameServerState* state);
 void destroy_server_state(NameServerState* state); // For clean shutdown
-void load_persistent_users(NameServerState* state); // <-- ADD
-void init_user_file_mutex(void);  // <-- ADD
-void destroy_user_file_mutex(void); // <-- ADD
 
 // Global state for the Name Server
 NameServerState server_state;
+
+
+void free_file_metadata(void* val) {
+    
+    if(!val)
+        return;
+    
+    FileMetadata* meta = (FileMetadata*)val;
+    ts_hashmap_destroy(meta->access_list, NULL); // NULL assumes it holds no malloc'd values yet
+    ts_hashmap_destroy(meta->pending_requests, NULL);
+    pthread_mutex_destroy(&meta->meta_lock);   
+    free(meta);
+}
+
 
 int main() {
     int server_fd, new_socket;
@@ -26,11 +38,12 @@ int main() {
 
     init_printf_mutex();
     init_server_state(&server_state);
-    init_user_file_mutex();
+    persistence_init();
+
+    persistence_load_state(&server_state);
 
     // get username/pwd/active/socket
     // statuses of all registered users so far
-    load_persistent_users(&server_state);
 
     safe_printf("--- Docs++ Name Server v%u Starting ---\n", PROTOCOL_VERSION);
 
@@ -93,12 +106,14 @@ int main() {
     close(server_fd);
     destroy_server_state(&server_state); // Free all maps
     destroy_printf_mutex();
+    persistence_destroy();
     return 0;
 }
 
 
 void init_server_state(NameServerState* state) {
     state->file_metadata_map = ts_hashmap_create();
+    state->file_cache = lru_cache_create(128);
     state->client_username_map = ts_hashmap_create();
     state->client_id_map = ts_hashmap_create();
     state->ss_map = ts_hashmap_create();
@@ -109,7 +124,7 @@ void init_server_state(NameServerState* state) {
     state->next_client_id = 1;
     state->next_ss_id = 1;
     pthread_mutex_init(&state->id_mutex, NULL);
-
+    pthread_mutex_init(&state->create_file_mutex, NULL);
     // TODO: Load persistent metadata from disk
     safe_printf("Server state initialized.\n");
 }
@@ -137,11 +152,13 @@ void destroy_server_state(NameServerState* state) {
     
     ts_hashmap_destroy(state->client_username_map, NULL); // <-- FIX
     ts_hashmap_destroy(state->client_id_map, free_client_info); // <-- OWNER
-
+    ts_hashmap_destroy(state->file_metadata_map, free_file_metadata);
+    lru_cache_destroy(state->file_cache);
     ts_hashmap_destroy(state->ss_map, free_ss_info);
     ts_hashmap_destroy(state->socket_to_client_id_map, free_socket_id_entry);
     ts_hashmap_destroy(state->socket_to_ss_id_map, free_socket_id_entry);
     pthread_mutex_destroy(&state->id_mutex);
+    pthread_mutex_destroy(&state->create_file_mutex);
     safe_printf("Server state destroyed.\n");
 
 }

@@ -13,6 +13,7 @@ typedef enum {
     CMD_CREATE,  
     CMD_WRITE,  
     CMD_UNDO, 
+    CMD_REDO,
     CMD_INFO, 
     CMD_DELETE, 
     CMD_STREAM,
@@ -22,7 +23,12 @@ typedef enum {
     CMD_EXEC, 
     CMD_HELP,
     CMD_EXIT,
-    CMD_EMPTY
+    CMD_EMPTY,
+    CMD_CLEAR,
+    CMD_REQACCESS,  // <-- ADD THIS
+    CMD_LISTREQS,   // <-- ADD THIS
+    CMD_APPROVE,    // <-- ADD THIS
+    CMD_DENY       // <-- ADD THIS
 } CommandType;
 
 // Holds the structured data from a parsed user command.

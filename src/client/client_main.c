@@ -4,10 +4,15 @@
 #include "client_repl.h"
 #include <termios.h> // For turning off terminal echo
 
+uint32_t my_client_id = 0;
+
+char username[MAX_USERNAME_LEN];
+char password[MAX_PASSWORD_LEN];
+
 static void get_password(char* buffer, size_t size) {
     struct termios old_term, new_term;
     
-    safe_printf("Password: (invisible on terminal)");
+    safe_printf("Password (invisible on terminal): ");
     
     // Turn off echoing
     if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
@@ -60,20 +65,35 @@ int main(int argc, char const *argv[]){
     }
 
     safe_printf("Connected to Name Server at %s:%d\n", nm_ip, nm_port);
-
-    char username[MAX_USERNAME_LEN];
-    char password[MAX_PASSWORD_LEN];
     
-    safe_printf("Username: ");
-    if (fgets(username, sizeof(username), stdin) == NULL) {
-        perror("fgets username failed");
+    while(1){
+
+        safe_printf("Username: ");
+        
+        if (fgets(username, sizeof(username), stdin) == NULL) { 
+            perror("fgets username failed");
+            exit(EXIT_FAILURE);
+        }
+
+        username[strcspn(username, "\r\n")] = 0;
+
+        if(strcmp(username, "everyone") == 0 || strcmp(username, "unregistered") == 0){
+            safe_printf("[Client Error] '%s' is a reserved username. Please choose another username.\n", username);
+            continue;
+        }
+        
+        if(strlen(username) == 0){
+            safe_printf("[Client Error] Username cannot be empty.\n");
+            continue;
+        }
+
+        break;
     }
-    username[strcspn(username, "\r\n")] = 0;
 
     get_password(password, sizeof(password));
 
 
-    // --- Send Registration ---
+    // ── Send Registration ──
     MsgHeader header;
     MsgPayload payload;
     memset(&header, 0, sizeof(header));
@@ -95,7 +115,7 @@ int main(int argc, char const *argv[]){
         exit(EXIT_FAILURE);
     }
 
-    // --- Wait for Registration Response ---
+    // ── Wait for Registration Response ──
     if (recv_message(nm_socket_fd, &header, &payload) <= 0) {
         safe_printf("Server disconnected during registration\n");
         close(nm_socket_fd);
@@ -108,7 +128,7 @@ int main(int argc, char const *argv[]){
         exit(EXIT_FAILURE);
     }
     
-    uint32_t my_client_id = payload.client_reg_res.new_client_id;
+    my_client_id = payload.client_reg_res.new_client_id;
     safe_printf("Successfully registered as Client %u\n", my_client_id);
     
     // this blocks and runs the main loop

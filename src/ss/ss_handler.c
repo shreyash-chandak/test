@@ -2,7 +2,14 @@
 #include "utils.h"
 #include "common.h"
 #include "ss_file_ops.h"
+#include "ss_write_helpers.h"
+#include "ss_handler.h"
 
+// We need this helper struct for the thread
+typedef struct {
+    int socket_fd;
+    StorageServerState* state;
+} ThreadArgs;
 
 /**
  * @brief Main router for requests from the NAME SERVER.
@@ -11,8 +18,6 @@
 void handle_nm_request(StorageServerState* state, int nm_sock, MsgHeader* header, MsgPayload* payload) {
     
     safe_printf("SS %u: Received command %u from NM\n", state->ss_id, header->opcode);
-
-    // --- We are MOVING the OP_NM_SS_CREATE_REQ case from here ---
 
     switch (header->opcode) {
         
@@ -29,62 +34,124 @@ void handle_nm_request(StorageServerState* state, int nm_sock, MsgHeader* header
 
 
 /**
- * @brief Main router for requests from a CLIENT (or NM acting as a client).
- * These are the P1 file operations.
+ * @brief The main thread routine for every new CLIENT connection.
+ * MOVED FROM SS_MAIN.C
  */
-void handle_client_request(StorageServerState* state, int client_sock, MsgHeader* header, MsgPayload* payload) {
-    
-    safe_printf("SS %u: Received command %u from a client\n", state->ss_id, header->opcode);
+void* handle_client_connection(void* arg) {
+    ThreadArgs* args = (ThreadArgs*)arg;
+    int sock = args->socket_fd;
+    StorageServerState* state = args->state;
+    free(arg);
 
-    // --- ADD THE LOGIC HERE ---
-    switch (header->opcode) {
+    safe_printf("SS: Handling new client connection on socket %d\n", sock);
+
+    MsgHeader header;
+    MsgPayload payload;
+    WriteSession* write_session = NULL; 
+
+    // 1. Receive the *first* packet
+    if (recv_message(sock, &header, &payload) <= 0) {
+        safe_printf("SS: Client on socket %d disconnected before first command.\n", sock);
+        close(sock);
+        return NULL;
+    }
+
+    safe_printf("SS %u: Received command %u from a client on socket %d\n", 
+        state->ss_id, header.opcode, sock);
+
+    // 2. Route the *first* command
+    switch (header.opcode) {
         
-        case OP_NM_SS_CREATE_REQ: { // This is sent by the NM
-            MsgHeader res_header = {0};
-            MsgPayload res_payload = {0};
-            res_header.version = PROTOCOL_VERSION;
-            res_header.client_id = state->ss_id; // Identify ourselves
-            res_header.error = ERR_NONE;
-            res_header.opcode = OP_SS_NM_CREATE_RES;
-            res_header.length = sizeof(MsgHeader);
+        case OP_NM_SS_CREATE_REQ:
+            handle_nm_ss_create(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
+        
+        case OP_NM_SS_DELETE_REQ:        
+            handle_nm_ss_delete(state, sock, &payload.file_req);
+            return NULL;
 
-            if (ss_create_file(state, payload->file_req.filename) == -1) {
-                safe_printf("SS %u: Failed to create file '%s'\n", 
-                    state->ss_id, payload->file_req.filename);
-                res_header.error = ERR_UNKNOWN;
-            } else {
-                safe_printf("SS %u: Successfully created '%s', sending ACK to NM\n", 
-                    state->ss_id, payload->file_req.filename);
-            }
+        case OP_CLIENT_SS_UNDO_REQ:
+            handle_ss_undo(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
+
+        case OP_CLIENT_SS_REDO_REQ:
+            handle_ss_redo(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
+        
+        case OP_CLIENT_SS_READ_REQ:
+            handle_ss_read(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
+        
+        case OP_CLIENT_SS_WRITE_START:
+            handle_ss_write_start(state, sock, header.client_id, 
+                                  &payload.write_start, &write_session);
             
-            // Send ACK/NACK back to NM *on this temporary socket*
-            if (send_message(client_sock, &res_header, &res_payload) == -1) {
-                safe_printf("SS %u: Failed to send CREATE_RES to NM\n", state->ss_id);
+            if (write_session == NULL) {
+                safe_printf("SS: WRITE_START failed. Closing connection.\n");
+                return NULL; // Handler already closed socket
             }
+            safe_printf("SS: WRITE_START OK. Entering session loop for socket %d\n", sock);
             break;
-        }
-        case OP_CLIENT_SS_READ_REQ: {
-            // This function handles the entire read loop and lock release.
-            // But it doesn't close the socket.
-            handle_ss_read(state, client_sock, &payload->file_req);
-            break;
-        }
-        // TODO: This is where we will handle:
-        // OP_CLIENT_SS_READ_REQ
-        // OP_CLIENT_SS_WRITE_START
-        // OP_CLIENT_SS_STREAM_REQ
-        // ...etc
+            
+        case OP_CLIENT_SS_STREAM_REQ: 
+            handle_ss_stream(state, sock, &payload.file_req);
+            return NULL;
+
+        case OP_NM_SS_INTERNAL_READ_REQ:
+        //safe_printf("DEBUG (SS): Received OP_NM_SS_INTERNAL_READ_REQ for %s\n",  payload.file_req.filename);
+            handle_nm_internal_read(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
 
         default:
-            safe_printf("SS %u: Received unknown client opcode %u\n",
-                state->ss_id, header->opcode);
-            break;
+            safe_printf("SS %u: Received unknown first opcode %u. Closing.\n",
+                state->ss_id, header.opcode);
+            send_ss_error(sock, ERR_INVALID_COMMAND, "Unknown or invalid initial command.");
+            close(sock);
+            return NULL;
     }
-    
-    // --- END OF ADDED LOGIC ---
 
-    // For now, just close it.
-    // The handle_... functions will be responsible for closing
-    // in the future.
-    close(client_sock);
+    // 3. --- If we are here, we are in a WRITE session ---
+    while (recv_message(sock, &header, &payload) > 0) {
+        
+        switch(header.opcode) {
+            
+            case OP_CLIENT_SS_WRITE_DATA:
+                handle_ss_write_data(write_session, &payload.write_data);
+                break;
+                
+            case OP_CLIENT_SS_ETIRW:
+                if (handle_ss_etirw(state, write_session) == 0) {
+                    // Success!
+                    MsgHeader res_header = {0};
+                    res_header.version = PROTOCOL_VERSION;
+                    res_header.opcode = OP_SS_CLIENT_ETIRW_RES;
+                    res_header.error = ERR_NONE;
+                    res_header.length = sizeof(MsgHeader);
+                    send_message(sock, &res_header, NULL);
+                } else {
+                    // Failure
+                    send_ss_error(sock, ERR_WRITE_FAILED, "Failed to commit changes to file.");
+                }
+                
+                safe_printf("SS: ETIRW complete. Closing connection %d\n", sock);
+                close(sock);
+                return NULL; 
+                
+            default:
+                safe_printf("SS: Received invalid opcode %u during WRITE session.\n", header.opcode);
+                send_ss_error(sock, ERR_INVALID_COMMAND, "Invalid command during write session.");
+                break;
+        }
+    }
+
+    // 4. --- Client disconnected mid-session ---
+    safe_printf("SS: Client on socket %d disconnected mid-session.\n", sock);
+    if (write_session) {
+        // Call our new cleanup function to find and release the lock
+        handle_ss_write_cleanup(state, write_session);
+        // Now, free the session struct itself
+        free_write_session(write_session);
+    }
+    close(sock);
+    return NULL;
 }

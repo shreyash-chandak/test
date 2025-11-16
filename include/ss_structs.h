@@ -32,6 +32,26 @@ typedef struct {
 } FileLockInfo;
 
 
+// --- NEW: P1 WRITE Session Structs ---
+
+// A single "insert" operation
+typedef struct WriteOp {
+    uint32_t word_index;
+    char content[MAX_WRITE_CONTENT_LEN];
+    struct WriteOp* next; // We'll use a simple linked list
+} WriteOp;
+
+// The full session for one client on one file
+typedef struct {
+    uint32_t client_id;
+    char filename[MAX_FILENAME_LEN];
+    uint32_t sentence_index;
+    WriteOp* operations; // Head of the linked list of edits
+} WriteSession;
+
+// --- END NEW ---
+
+
 // --- Main State Struct ---
 
 typedef struct {
@@ -51,8 +71,11 @@ typedef struct {
     // This manages all concurrency for all files on this SS.
     TSHashMap* file_lock_map;
 
+    // --- NEW: Active Write Session Map ---
+    // Map of: (char* client_socket_str) -> (WriteSession* session)
+    TSHashMap* active_write_sessions;
+
 } StorageServerState;
 
 
 #endif // SS_STRUCTS_H
-

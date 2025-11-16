@@ -3,18 +3,25 @@
 #include "common.h"
 #include <stdbool.h>
 #include <sys/stat.h>
+#include "nm_persistence.h"
 
-#define USER_FILE_PATH "persistentstore/users.txt"
-static pthread_mutex_t user_file_mutex;
+typedef struct {
+    TSHashMap* file_metadata_map;
+    // helper to get rid of the file 
+    // metadata when a SS leaves.
+} FileCleanupArgs;
 
-void init_user_file_mutex(void) {
-    pthread_mutex_init(&user_file_mutex, NULL);
-}
-
-void destroy_user_file_mutex(void) {
-    pthread_mutex_destroy(&user_file_mutex);
-}
-
+// This callback will be run for every file in the dead SS's file_list
+// static void remove_file_from_metadata_map_callback(const char* key, void* value, void* arg) {
+//     FileCleanupArgs* args = (FileCleanupArgs*)arg;
+//     const char* filename = key;
+//     safe_printf("NM: Un-registering stale file '%s' from global map.\n", filename);
+//     void* stale_metadata = ts_hashmap_remove(args->file_metadata_map, filename);
+//     if (stale_metadata) {
+//         free(stale_metadata);
+//     }
+// }
+// Unused? ^
 
 // Helper to convert an int socket to a string key
 static void get_socket_key(int sock, char* key_buffer) {
@@ -25,83 +32,14 @@ static void get_id_key(uint32_t id, char* key_buffer) {
     snprintf(key_buffer, 16, "%u", id);
 }
 
-static void append_user_to_store(const char* username, const char* password) {
-    pthread_mutex_lock(&user_file_mutex);
-    
-    FILE* file = fopen(USER_FILE_PATH, "a");
-    if (file == NULL) {
-        // Attempt to create the directory if it doesn't exist
-        mkdir("persistentstore", 0755); // 0755 = rwxr-xr-x
-        file = fopen(USER_FILE_PATH, "a");
-        if (file == NULL) {
-            safe_printf("NM: CRITICAL: Failed to create or open %s.\n", USER_FILE_PATH);
-            pthread_mutex_unlock(&user_file_mutex);
-            return;
-        }
-    }
-    
-    fprintf(file, "%s,%s\n", username, password);
-    fclose(file);
-    
-    pthread_mutex_unlock(&user_file_mutex);
-}
-
-void load_persistent_users(NameServerState* state) {
-    pthread_mutex_lock(&user_file_mutex); // Lock before reading
-    
-    FILE* file = fopen(USER_FILE_PATH, "r");
-    if (file == NULL) {
-        safe_printf("NM: No persistent user file found. Starting fresh.\n");
-        pthread_mutex_unlock(&user_file_mutex);
-        return;
-    }
-    
-    char line_buffer[MAX_USERNAME_LEN + MAX_PASSWORD_LEN + 2];
-    int count = 0;
-    
-    while (fgets(line_buffer, sizeof(line_buffer), file)) {
-        line_buffer[strcspn(line_buffer, "\r\n")] = 0;
-        if (strlen(line_buffer) == 0) continue; // Skip empty lines
-
-        char* username = strtok(line_buffer, ",");
-        char* password = strtok(NULL, ",");
-
-        if (username && password) {
-            pthread_mutex_lock(&state->id_mutex);
-            uint32_t new_id = state->next_client_id++;
-            pthread_mutex_unlock(&state->id_mutex);
-            
-            ClientInfo* client = malloc(sizeof(ClientInfo));
-            client->id = new_id;
-            client->socket_fd = -1;
-            client->is_active = false;
-            strncpy(client->username, username, MAX_USERNAME_LEN - 1);
-            strncpy(client->password, password, MAX_PASSWORD_LEN - 1);
-            
-            char client_id_key[16];
-            get_id_key(new_id, client_id_key);
-            ts_hashmap_put(state->client_username_map, client->username, client);
-            ts_hashmap_put(state->client_id_map, client_id_key, client);
-            
-            count++;
-        }
-    }
-    
-    fclose(file);
-    pthread_mutex_unlock(&user_file_mutex);
-    safe_printf("NM: Preloaded %d persistent users.\n", count);
-}
-
 uint32_t register_client(int sock, Payload_ClientRegisterReq* payload, NameServerState* state, ErrorCode* err_code) {
-    safe_printf("--- AUTH DEBUG ---\n");
-    safe_printf("  Attempting to find user with key: \"%s\"\n", payload->username);
-    // --- 1. Check if user *already exists* (LOGIN attempt) ---
+    safe_printf("── AUTH DEBUG ──\n");
+    safe_printf("  Attempting to find user with password: \"%s\"\n", payload->username);
+    // ── 1. Check if user *already exists* (LOGIN attempt) ──
     ClientInfo* client = ts_hashmap_get(state->client_username_map, payload->username);
 
     if (client != NULL) {
-        safe_printf("  DEBUG: Found existing user. Checking password...\n");
-        safe_printf("--- END DEBUG ---\n");
-        // --- LOGIN LOGIC ---
+        
         if (client->is_active) {
             safe_printf("NM: Client '%s' (ID %u) already active. Rejecting.\n", payload->username, client->id);
             *err_code = ERR_ALREADY_ACTIVE;
@@ -115,7 +53,7 @@ uint32_t register_client(int sock, Payload_ClientRegisterReq* payload, NameServe
             return 0;
         }
 
-        // --- Success! This is a RE-LOGIN. ---
+        // ── Success! This is a RE-LOGIN. ──
         uint32_t existing_id = client->id;
         client->socket_fd = sock;
         client->is_active = true;
@@ -130,10 +68,11 @@ uint32_t register_client(int sock, Payload_ClientRegisterReq* payload, NameServe
         *err_code = ERR_NONE;
         return existing_id;
 
-    } else {
+    } 
+    else {
         safe_printf("  DEBUG: User not found. Proceeding with new user registration.\n");
-        safe_printf("--- END DEBUG ---\n");
-        // --- NEW USER REGISTRATION LOGIC ---
+        safe_printf("── END DEBUG ──\n");
+        // ── NEW USER REGISTRATION LOGIC ──
         safe_printf("NM: Username '%s' not found. Registering as new user.\n", payload->username);
 
         pthread_mutex_lock(&state->id_mutex);
@@ -165,9 +104,9 @@ uint32_t register_client(int sock, Payload_ClientRegisterReq* payload, NameServe
         ts_hashmap_put(state->client_id_map, client_id_key, new_client);
         ts_hashmap_put(state->socket_to_client_id_map, socket_key, id_entry);
         
-        // --- ATOMIC WRITE TO DISK ---
-        append_user_to_store(new_client->username, new_client->password);
-
+        // ── ATOMIC WRITE TO DISK ──
+        persistence_log_op("USER,%s,%s", new_client->username, new_client->password);
+        
         safe_printf("NM: Registered *new* client '%s' as Client %u\n", new_client->username, new_id);
         *err_code = ERR_NONE;
         return new_id;
@@ -214,6 +153,20 @@ uint32_t register_ss(int sock, Payload_SSRegisterReq* payload, NameServerState* 
 }
 
 
+static void orphan_file_in_metadata_map_callback(const char* key, void* value, void* arg) {
+    NameServerState* state = (NameServerState*)arg;
+    const char* filename = key;
+
+    FileMetadata* meta = ts_hashmap_get(state->file_metadata_map, filename);
+    if (meta) {
+        // We found the metadata. Mark it as "orphaned" (no SS).
+        safe_printf("NM: File '%s' is now orphaned (was on SS %u)\n", 
+            filename, meta->ss_id);
+        meta->ss_id = 0; // Set to invalid ID
+    }
+    // If meta is NULL, it was already deleted by a user, which is fine.
+}
+
 void handle_disconnect(int sock, NameServerState* state) {
     char socket_key[16];
     get_socket_key(sock, socket_key);
@@ -252,15 +205,19 @@ void handle_disconnect(int sock, NameServerState* state) {
         char ss_key[16];
         snprintf(ss_key, 16, "%u", ss_id);
         
-        // Now we can remove from the main ss_map
+
         StorageServerInfo* ss = ts_hashmap_remove(state->ss_map, ss_key);
         if (ss) {
             safe_printf("NM: Removed SS %u from state.\n", ss_id);
-            // --- FIX: Use correct destroy function ---
+
+            ts_hashmap_iterate(ss->file_list, orphan_file_in_metadata_map_callback, state);
+            
+            safe_printf("NM: Removed SS %u's files from state.\n", ss_id);
             ts_hashmap_destroy(ss->file_list, NULL); // file_list values are TBD
             free(ss);
-        } else {
-            safe_printf("NM: CRITICAL: SS %u was in socket_map but not ss_map!\n", ss_id);
+        } 
+        else{
+            safe_printf("NM: CRITICAL: SS %u was in socket_map but not ss_map\n", ss_id);
         }
         close(sock);
         return; // It was an SS, we're done.

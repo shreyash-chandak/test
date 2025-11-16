@@ -70,6 +70,16 @@ typedef enum {
     // STEP 4: Client commits
     OP_CLIENT_SS_ETIRW,       // Client -> SS: "I'm done. ETIRW."
     OP_SS_CLIENT_ETIRW_RES,   // SS -> Client: "OK, saved and unlocked."
+    
+    OP_SS_NM_WRITE_COMPLETE,    // metadata needs update
+    OP_SS_NM_UNDO_COMPLETE,
+
+    // --- REDO ---
+    OP_CLIENT_REDO_REQ,
+    OP_NM_REDO_RES,
+    OP_CLIENT_SS_REDO_REQ,
+    OP_SS_CLIENT_REDO_RES,
+    OP_SS_NM_REDO_COMPLETE,
 
     // --- P2 Monster: EXEC Flow (NM-Orchestrated) ---
     OP_CLIENT_EXEC_REQ,       // Client -> NM: "EXEC file.txt"
@@ -87,7 +97,18 @@ typedef enum {
     OP_HEARTBEAT_PING,        // NM <-> SS, NM <-> Client
     OP_HEARTBEAT_PONG,        // NM <-> SS, NM <-> Client
     OP_ERROR_RES,             // A generic, explicit error packet with a msg
-    OP_DISCONNECT_REQ
+    OP_DISCONNECT_REQ,
+    OP_NM_SS_DELETE_REQ,
+    OP_SS_NM_DELETE_RES,
+
+    // request access
+
+    OP_CLIENT_REQACCESS_REQ,    // <-- ADD THIS
+    OP_NM_REQACCESS_RES,      // <-- ADD THIS
+    OP_CLIENT_LISTREQS_REQ,   // <-- ADD THIS
+    OP_NM_LISTREQS_RES,       // <-- ADD THIS
+    OP_CLIENT_APPROVE_REQ,    // <-- ADD THIS (Covers approve/deny)
+    OP_NM_APPROVE_RES        // <-- ADD THIS
 
 } OpCode;
 
@@ -98,6 +119,8 @@ typedef enum {
     ERR_UNKNOWN,
     ERR_FILE_NOT_FOUND,
     ERR_FILE_EXISTS,
+    ERR_USER_NOT_FOUND,
+    ERR_DANGEROUS_COMMAND,
     ERR_ALREADY_ACTIVE,
     ERR_ACCESS_DENIED,        // P2: Your bread and butter
     ERR_SENTENCE_LOCKED,      // P1: Your bread and butter
@@ -106,6 +129,7 @@ typedef enum {
     ERR_INVALID_COMMAND,
     ERR_SS_DOWN,
     ERR_NM_DOWN,
+    ERR_FILE_LOCKED,
     ERR_WRITE_FAILED,
     ERR_READ_FAILED,
     ERR_EXEC_FAILED,
@@ -238,11 +262,31 @@ typedef struct {
     char content[MAX_WRITE_CONTENT_LEN];
 } Payload_ClientSSWriteData;
 
+typedef struct {
+    char     filename[MAX_FILENAME_LEN];
+    uint64_t new_file_size;
+    // We'll add word/char counts here later. For now, size is enough.
+} Payload_SSNMWriteComplete;
+
+typedef struct {
+    char     filename[MAX_FILENAME_LEN];
+    uint64_t new_file_size;
+} Payload_SSNMUndoComplete;
+
+// --- REDO ---
+typedef Payload_SSNMUndoComplete Payload_SSNMRedoComplete;
+
 // OP_HEARTBEAT_PING, OP_HEARTBEAT_PONG
 typedef struct {
     uint32_t sender_id; // The client_id or ss_id
     uint64_t timestamp_ms;
 } Payload_Heartbeat;
+
+typedef struct {
+    char     filename[MAX_FILENAME_LEN];
+    uint64_t file_size; 
+    // We can add timestamps here later
+} Payload_SSSyncFile;
 
 
 // --- Generic "OK" or "Error" Responses ---
@@ -273,7 +317,11 @@ typedef union {
     Payload_ClientWriteReq      write_req;
     Payload_ClientSSWriteStart  write_start;
     Payload_ClientSSWriteData   write_data;
+    Payload_SSNMWriteComplete   write_complete;
+    Payload_SSNMUndoComplete    undo_complete;
+    Payload_SSNMRedoComplete    redo_complete;
     Payload_Heartbeat           heartbeat;
+    Payload_SSSyncFile          ss_sync;
 } MsgPayload;
 
 

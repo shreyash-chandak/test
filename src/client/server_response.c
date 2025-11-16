@@ -3,8 +3,13 @@
 #include "common.h"
 #include "protocol.h"
 #include "parse_command.h"
+#include "client_repl.h"
 
-// --- Internal Function Prototypes ---
+// ── Internal Function Prototypes ──
+static void print_generic_response(MsgPayload* payload);
+static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* original_cmd);
+static void handle_ss_read_loop(int ss_socket);
+static void handle_ss_write_loop(int ss_socket); 
 
 /**
  * @brief Handles simple text-based replies from the NM (e.g., VIEW, LIST, INFO).
@@ -13,6 +18,47 @@
 static void print_generic_response(MsgPayload* payload) {
     safe_printf("%s\n", payload->generic.buffer);
 }
+
+static void handle_ss_stream_loop(int ss_socket) {
+    MsgHeader header;
+    MsgPayload payload;
+
+    safe_printf("  [Streaming file...]\n");
+
+    while(1) {
+        int status = recv_message(ss_socket, &header, &payload); 
+        if (status <= 0) {
+            safe_printf("\n[Error] Disconnected from SS during STREAM.\n");
+            return;
+        }
+
+        // Check for the END packet first
+        if (header.opcode == OP_SS_CLIENT_STREAM_END) { 
+            safe_printf("\n  [Stream complete.]\n");
+            return; // Done
+        }
+
+        // Check for an error
+        if (header.opcode == OP_ERROR_RES || header.error != ERR_NONE) {
+            safe_printf("\n[SS Error] %s\n", payload.error.message);
+            return;
+        }
+
+        // Check for the DATA packet
+        if (header.opcode == OP_SS_CLIENT_STREAM_DATA) { 
+            // Print the word followed by a space
+            printf("%s", payload.stream_data.word);
+            fflush(stdout); // Force it to print *now*
+
+            // ── Delay on the client, as per spec ──
+            usleep(100000); // 100,000 microseconds = 0.1 seconds
+        } else {
+            safe_printf("\n[Error] Unexpected packet %u from SS.\n", header.opcode);
+            return;
+        }
+    }
+}
+
 
 /**
  * @brief Handles the full READ data loop with the SS.
@@ -44,7 +90,7 @@ static void handle_ss_read_loop(int ss_socket) {
             return;
         }
 
-        // --- This is the actual data handling ---
+        // ── This is the actual data handling ──
         if (first_chunk) {
             safe_printf("  [File Size: %u bytes]\n", payload.file_chunk.file_size);
             first_chunk = false;
@@ -71,6 +117,89 @@ static void handle_ss_read_loop(int ss_socket) {
     }
 }
 
+/**
+ * @brief Runs the interactive sub-REPL for a WRITE session.
+ */
+static void handle_ss_write_loop(int ss_socket) {
+    char line[1024];
+    MsgHeader header = {0};
+    MsgPayload payload = {0};
+    
+    safe_printf("  [Sentence locked. You are now in WRITE mode.]\n");
+    safe_printf("  Type '<word_index> <content>' to insert.\n");
+    safe_printf("  Type 'ETIRW' to commit and exit.\n");
+
+    while (1) {
+        printf("  write> ");
+        fflush(stdout);
+
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            safe_printf("\n[Error] Input error. Aborting WRITE session.\n");
+            // We should just close the socket and let the SS timeout
+            return;
+        }
+
+        line[strcspn(line, "\r\n")] = 0; // Chomp newline
+
+        // ── Check for ETIRW ──
+        if (strcmp(line, "ETIRW") == 0 || strcmp(line, "etirw") == 0) {
+            safe_printf("  [Sending ETIRW...]\n");
+            header.version = PROTOCOL_VERSION;
+            header.opcode = OP_CLIENT_SS_ETIRW;
+            header.length = sizeof(MsgHeader);
+            
+            if (send_message(ss_socket, &header, &payload) == -1) {
+                safe_printf("[Error] Failed to send ETIRW. Disconnecting.\n");
+                return;
+            }
+            
+            // Wait for the final "OK"
+            if (recv_message(ss_socket, &header, &payload) <= 0) {
+                safe_printf("[Error] Disconnected waiting for ETIRW response.\n");
+                return;
+            }
+            
+            if (header.error != ERR_NONE) {
+                safe_printf("[SS Error] Commit failed: %s\n", payload.error.message);
+            } else {
+                safe_printf("  [Write Successful. Commit complete.]\n");
+            }
+            return; // Exit loop
+        }
+
+        // ── Parse: <index> <content...> ──
+        int word_index;
+        char content[MAX_WRITE_CONTENT_LEN] = {0};
+        
+        // This format reads an int, skips whitespace, then reads
+        // up to MAX_WRITE_CONTENT_LEN-1 characters of content.
+        char format_string[64];
+        snprintf(format_string, 64, "%%d %%%d[^\n]", MAX_WRITE_CONTENT_LEN - 1);
+
+        int items = sscanf(line, format_string, &word_index, content);
+        
+        if (items != 2 || word_index < 0) {
+            safe_printf("  [Invalid format. Use: <index> <content> or ETIRW]\n");
+            continue;
+        }
+
+        // ── Send OP_CLIENT_SS_WRITE_DATA ──
+        header.version = PROTOCOL_VERSION;
+        header.opcode = OP_CLIENT_SS_WRITE_DATA;
+        header.length = sizeof(MsgHeader) + sizeof(Payload_ClientSSWriteData);
+        
+        payload.write_data.word_index = (uint32_t)word_index;
+        strncpy(payload.write_data.content, content, MAX_WRITE_CONTENT_LEN - 1);
+        
+        if (send_message(ss_socket, &header, &payload) == -1) {
+            safe_printf("[Error] Failed to send WRITE_DATA. Disconnecting.\n");
+            return;
+        }
+        
+        safe_printf("  [Data sent.]\n");
+        // No response is expected from WRITE_DATA
+    }
+}
 
 // 3 way handshake
 
@@ -109,6 +238,8 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
     MsgPayload ss_payload = {0};
     ss_header.version = PROTOCOL_VERSION;
     ss_header.error = ERR_NONE;
+    // The SS needs our ID to manage locks properly
+    ss_header.client_id = my_client_id;
     
     // Use the original command to decide which SS opcode to send
     switch (original_cmd->type) {
@@ -133,6 +264,11 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
             ss_header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
             strncpy(ss_payload.file_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
             break;
+        case CMD_REDO:
+            ss_header.opcode = OP_CLIENT_SS_REDO_REQ;
+            ss_header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
+            strncpy(ss_payload.file_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
+            break;
         default:
             safe_printf("[Internal Error] Redirect for unknown command type.\n");
             close(ss_socket);
@@ -145,7 +281,7 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
         return;
     }
 
-    // --- 3. Handle the SS's response (THE NEW LOGIC) ---
+    // ── 3. Handle the SS's response (THE NEW LOGIC) ──
     // We've sent the request. Now we handle the response,
     // which might be a single packet (WRITE) or a loop (READ).
     
@@ -163,25 +299,36 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
             } else if (ss_header.error != ERR_NONE) {
                 safe_printf("[SS Error] %s\n", ss_payload.error.message);
             } else {
-                safe_printf("  [SS Operation Successful. Entering WRITE mode...]\n");
-                // TODO: Start the real interactive write REPL
+                // We got the OK. Start the sub-REPL.
+                handle_ss_write_loop(ss_socket);
             }
             break;
             
         case CMD_STREAM:
-        case CMD_UNDO:
-            // TODO: Implement these handlers
-            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
-                 safe_printf("[Error] Disconnected from SS during operation.\n");
-            } else if (ss_header.error != ERR_NONE) {
-                 safe_printf("[SS Error] %s\n", ss_payload.error.message);
-            } else {
-                 safe_printf("  [SS Operation Successful]\n");
-            }
+            handle_ss_stream_loop(ss_socket);
             break;
+        case CMD_UNDO:
+            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
+                safe_printf("[Error] Disconnected from SS during UNDO.\n");
+            } else if (ss_header.error != ERR_NONE) {
+                safe_printf("[SS Error] %s\n", ss_payload.error.message);
+            } else {
+                safe_printf("  [Undo Successful.]\n");
+            }
+            break; 
+        case CMD_REDO: 
+            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
+                safe_printf("[Error] Disconnected from SS during REDO.\n");
+            } else if (ss_header.error != ERR_NONE) {
+                safe_printf("[SS Error] %s\n", ss_payload.error.message);
+            } else {
+                safe_printf("  [Redo Successful.]\n");
+            }
+            break; // Done, close socket
         
         default:
-             break; // Should be impossible
+            safe_printf("[Internal Error] Redirect for unknown command type.\n");
+             break;
     }
 
     // 4. Close the temporary connection
@@ -200,43 +347,60 @@ void handle_server_response(MsgHeader* header, MsgPayload* payload, ParsedComman
         return;
     }
 
-    // --- Process Successful Response ---
-    safe_printf("--- Server Response ---\n");
+    // ── Process Successful Response ──
+    safe_printf("── Server Response ──\n");
     switch(header->opcode) {
-        // --- Generic "OK" from NM ---
+        // ── Generic "OK" from NM ──
         case OP_NM_CREATE_RES:
         case OP_NM_DELETE_RES:
         case OP_NM_ACCESS_RES:
             safe_printf("  Success.\n");
             break;
             
-        // --- Data Replies from NM ---
+        // ── Data Replies from NM ──
         case OP_NM_VIEW_RES:
         case OP_NM_INFO_RES:
         case OP_NM_LIST_RES:
             print_generic_response(payload);
             break;
             
-        // --- Redirects to SS ---
+        // ── Redirects to SS ──
         case OP_NM_READ_RES:
         case OP_NM_WRITE_RES:
         case OP_NM_STREAM_RES:
         case OP_NM_UNDO_RES:
+        case OP_NM_REDO_RES:
             handle_ss_redirect(&payload->redirect, original_cmd);
             break;
         
-        // --- EXEC Replies from NM ---
+        // ── EXEC Replies from NM ──
         case OP_NM_CLIENT_EXEC_OUTPUT:
+            size_t data_len = header->length - sizeof(MsgHeader);
+            payload->generic.buffer[data_len] = '\0';
             // This opcode is sent multiple times
-            safe_printf("  EXEC: %s\n", payload->generic.buffer);
+            safe_printf("  %s\n", payload->generic.buffer); // <-- REMOVED PREFIX
+            fflush(stdout);
             break;
+
         case OP_NM_CLIENT_EXEC_END:
             safe_printf("  [Execution Finished]\n");
+            break;
+        
+        case OP_NM_REQACCESS_RES:
+            safe_printf("  [Access request sent successfully.]\n");
+            break;
+        case OP_NM_APPROVE_RES:
+            safe_printf("  [Request processed successfully.]\n");
+            break;
+        case OP_NM_LISTREQS_RES:
+            // This is a string response, same as VIEW
+            print_generic_response(payload);
             break;
             
         default:
             safe_printf("  Received an unknown success response (OpCode: %u)\n", header->opcode);
             break;
     }
-    safe_printf("-----------------------\n");
+    if (header->opcode == OP_NM_CLIENT_EXEC_OUTPUT) return;
+    safe_printf("────────────────\n");
 }

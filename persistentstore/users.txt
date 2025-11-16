@@ -1,5 +1,0 @@
-psk,retard
-shreyash,curlyhair
-wronguser,retard
-user,pass
-a,a

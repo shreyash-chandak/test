@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "protocol.h"
 #include "ts_hashmap.h"
+#include "lru_cache.h"
 
 // --- THESE STRUCTS ARE NOW CORRECT ---
 
@@ -30,10 +31,19 @@ typedef struct {
 
 // Info about a specific file (value in the file_metadata_map)
 typedef struct {
+    
     char filename[MAX_FILENAME_LEN];
-    uint32_t ss_id; // Which SS has this file
+    uint32_t ss_id;
+    // Which SS has this file
     char owner_username[MAX_USERNAME_LEN];
-    // TODO: Add ACL list
+    uint64_t file_size;
+    uint64_t created_at;
+    uint64_t modified_at;
+    uint64_t accessed_at;
+    TSHashMap* access_list;
+    TSHashMap* pending_requests;
+    pthread_mutex_t meta_lock;
+
 } FileMetadata;
 
 // Helper struct for the client_map
@@ -55,6 +65,9 @@ typedef struct {
     // --- MAPS ---
     // (filename -> FileMetadata*)
     TSHashMap* file_metadata_map; 
+
+    // LRU Cache
+    LRUCache* file_cache;
     
     // (username -> ClientInfo*)
     TSHashMap* client_username_map;
@@ -76,7 +89,7 @@ typedef struct {
     uint32_t next_client_id;
     uint32_t next_ss_id;
     pthread_mutex_t id_mutex;
-
+    pthread_mutex_t create_file_mutex;
 } NameServerState;
 
 #endif // NM_STRUCTS_H

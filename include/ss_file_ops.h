@@ -12,13 +12,15 @@ void init_ss_state(StorageServerState* state, const char* data_dir,
 int ss_create_file(StorageServerState* state, const char* filename);
 void free_file_lock_info(void* val);
 
-// --- NEW P1 FUNCTION ---
-/**
- * @brief Handles a client's READ request.
- * Acquires a read lock, reads the file, and sends it
- * back to the client in chunks.
- */
+// --- P1 Functions ---
 void handle_ss_read(StorageServerState* state, int client_sock, 
                     Payload_FileRequest* payload);
+
+void handle_nm_ss_create(StorageServerState* state, int sock, Payload_FileRequest* payload);
+void handle_nm_ss_delete(StorageServerState* state, int sock, Payload_FileRequest* payload);
+void handle_ss_undo(StorageServerState* state, int client_sock, Payload_FileRequest* payload);
+void handle_ss_redo(StorageServerState* state, int client_sock, Payload_FileRequest* payload);
+void handle_ss_stream(StorageServerState* state, int client_sock, Payload_FileRequest* payload);
+void handle_nm_internal_read(StorageServerState* state, int sock, Payload_FileRequest* payload);
 
 #endif // SS_FILE_OPS_H
