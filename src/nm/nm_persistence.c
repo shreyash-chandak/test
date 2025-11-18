@@ -161,16 +161,25 @@ static void load_metadata(NameServerState* state) {
             if (operation == NULL) continue;
             count++;
             if (strcmp(operation, "CREATE") == 0) {
+                // Format: META,CREATE,<file>,<owner>,<ss_id_1>,<ss_id_2>,<timestamp>
                 char* filename = strtok(NULL, ",");
                 char* owner = strtok(NULL, ",");
-                char* ss_id_str = strtok(NULL, ",");
+                char* ss_id1_str = strtok(NULL, ",");
+                char* ss_id2_str = strtok(NULL, ","); 
                 char* created_str = strtok(NULL, ",");
 
-                if (filename && owner && ss_id_str && created_str) {
+                if (filename && owner && ss_id1_str && ss_id2_str && created_str) { 
                     FileMetadata* new_meta = malloc(sizeof(FileMetadata));
+                    if (!new_meta) { 
+                        safe_printf("NM: CRITICAL: malloc failed while loading metadata for '%s'. Skipping.\n", filename);
+                        continue; // Skip to the next log entry so we don't crash
+                    }
+                    
+                    pthread_mutex_init(&new_meta->meta_lock, NULL); 
                     strncpy(new_meta->filename, filename, MAX_FILENAME_LEN - 1);
                     strncpy(new_meta->owner_username, owner, MAX_USERNAME_LEN - 1);
-                    new_meta->ss_id = (uint32_t)atoi(ss_id_str);
+                    new_meta->ss_replicas[0] = (uint32_t)atoi(ss_id1_str);
+                    new_meta->ss_replicas[1] = (uint32_t)atoi(ss_id2_str);
                     new_meta->created_at = (uint64_t)atoll(created_str);
                     new_meta->modified_at = new_meta->created_at;
                     new_meta->accessed_at = new_meta->created_at;
@@ -230,6 +239,23 @@ static void load_metadata(NameServerState* state) {
                     uint64_t file_size = (uint64_t)atoll(size_str);
 
                     // A REDO log updates all three fields, just like a WRITE
+                    meta->modified_at = timestamp;
+                    meta->accessed_at = timestamp; 
+                    meta->file_size = file_size;
+                }
+            } else if (strcmp(operation, "REVERT") == 0) { 
+                // Processes: META,REVERT,<filename>,<timestamp>,<file_size>
+                char* filename = strtok(NULL, ",");
+                char* timestamp_str = strtok(NULL, ",");
+                char* size_str = strtok(NULL, ",");
+
+                if (filename && timestamp_str && size_str) {
+                    FileMetadata* meta = get_or_create_meta(state, filename);
+
+                    uint64_t timestamp = (uint64_t)atol(timestamp_str);
+                    uint64_t file_size = (uint64_t)atoll(size_str);
+
+                    // A REVERT log updates all three fields, just like a WRITE
                     meta->modified_at = timestamp;
                     meta->accessed_at = timestamp; 
                     meta->file_size = file_size;

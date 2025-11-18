@@ -37,6 +37,7 @@ int main() {
     socklen_t addrlen = sizeof(address);
 
     init_printf_mutex();
+    enable_logging_timestamps();
     init_server_state(&server_state);
     persistence_init();
 

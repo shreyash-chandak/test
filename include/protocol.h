@@ -81,6 +81,32 @@ typedef enum {
     OP_SS_CLIENT_REDO_RES,
     OP_SS_NM_REDO_COMPLETE,
 
+    // --- CHECKPOINTS ---
+    OP_CLIENT_CHECKPOINT_REQ,
+    OP_NM_CHECKPOINT_RES,
+    OP_CLIENT_SS_CHECKPOINT_REQ,
+    OP_SS_CLIENT_CHECKPOINT_RES,
+
+    OP_CLIENT_REVERT_REQ,
+    OP_NM_REVERT_RES,
+    OP_CLIENT_SS_REVERT_REQ,
+    OP_SS_CLIENT_REVERT_RES,
+    OP_SS_NM_REVERT_COMPLETE,
+
+    OP_CLIENT_VIEWCHECKPOINT_REQ,
+    OP_NM_VIEWCHECKPOINT_RES,
+    OP_CLIENT_SS_VIEWCHECKPOINT_REQ,
+    // (Uses OP_SS_CLIENT_READ_RES for data)
+
+    OP_CLIENT_LISTCHECKPOINTS_REQ,
+    OP_NM_LISTCHECKPOINTS_RES,
+    OP_CLIENT_SS_LISTCHECKPOINTS_REQ,
+    OP_SS_CLIENT_LISTCHECKPOINTS_RES,
+
+    // --- REPLICATION ---
+    OP_NM_SS_REPLICATE_REQ,     // NM -> Secondary SS (Async)
+    OP_SS_SS_REPLICATE_READ_REQ, // Secondary SS -> Primary SS
+
     // --- P2 Monster: EXEC Flow (NM-Orchestrated) ---
     OP_CLIENT_EXEC_REQ,       // Client -> NM: "EXEC file.txt"
     OP_NM_SS_INTERNAL_READ_REQ, // NM -> SS: "I (NM) need file.txt *now*"
@@ -262,6 +288,12 @@ typedef struct {
     char content[MAX_WRITE_CONTENT_LEN];
 } Payload_ClientSSWriteData;
 
+// CLIENT_CHECKPOINT_REQ, CLIENT_REVERT_REQ, CLIENT_VIEWCHECKPOINT_REQ
+typedef struct {
+    char filename[MAX_FILENAME_LEN];
+    char tag[MAX_FILENAME_LEN]; // For the checkpoint tag
+} Payload_CheckpointRequest;
+
 typedef struct {
     char     filename[MAX_FILENAME_LEN];
     uint64_t new_file_size;
@@ -275,6 +307,16 @@ typedef struct {
 
 // --- REDO ---
 typedef Payload_SSNMUndoComplete Payload_SSNMRedoComplete;
+
+// --- CHECKPOINT ---
+typedef Payload_SSNMUndoComplete Payload_SSNMRevertComplete;
+
+// OP_NM_SS_REPLICATE_REQ
+typedef struct {
+    char filename[MAX_FILENAME_LEN];
+    char primary_ss_ip[MAX_IP_LEN];
+    uint16_t primary_ss_port;
+} Payload_ReplicateRequest;
 
 // OP_HEARTBEAT_PING, OP_HEARTBEAT_PONG
 typedef struct {
@@ -320,6 +362,9 @@ typedef union {
     Payload_SSNMWriteComplete   write_complete;
     Payload_SSNMUndoComplete    undo_complete;
     Payload_SSNMRedoComplete    redo_complete;
+    Payload_SSNMRevertComplete  revert_complete;
+    Payload_CheckpointRequest   checkpoint_req;
+    Payload_ReplicateRequest    replicate_req; 
     Payload_Heartbeat           heartbeat;
     Payload_SSSyncFile          ss_sync;
 } MsgPayload;

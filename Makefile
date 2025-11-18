@@ -1,5 +1,3 @@
-# Makefile for Docs++ Project
-
 # --- Compiler and Flags ---
 CC = gcc
 # CFLAGS: -g = debugging symbols, -Wall = all warnings, -pthread = for pthreads

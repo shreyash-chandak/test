@@ -1,7 +1,5 @@
 #include "lru_cache.h"
-#include "common.h" // For malloc, free, etc.
-
-// --- Internal Helper Functions (NOT thread-safe) ---
+#include "common.h" 
 
 // Creates a new, isolated node
 static CacheNode* _create_node(const char* key, void* value) {

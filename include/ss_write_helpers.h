@@ -41,4 +41,8 @@ void free_write_session(WriteSession* session);
  */
 void handle_ss_write_cleanup(StorageServerState* state, WriteSession* session);
 
+uint32_t get_sentence_count(StorageServerState* state, const char* filename);
+int apply_changes_to_file(StorageServerState* state, WriteSession* session, 
+                            const char* tmp_path, const char* final_path);
+
 #endif // SS_WRITE_HELPERS_H

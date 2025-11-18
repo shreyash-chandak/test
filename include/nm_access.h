@@ -1,5 +1,5 @@
-#ifndef NM_BONUS_H
-#define NM_BONUS_H
+#ifndef NM_ACCESS_H
+#define NM_ACCESS_H
 
 #include "protocol.h"
 #include "nm_structs.h"

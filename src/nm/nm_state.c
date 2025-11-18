@@ -11,18 +11,6 @@ typedef struct {
     // metadata when a SS leaves.
 } FileCleanupArgs;
 
-// This callback will be run for every file in the dead SS's file_list
-// static void remove_file_from_metadata_map_callback(const char* key, void* value, void* arg) {
-//     FileCleanupArgs* args = (FileCleanupArgs*)arg;
-//     const char* filename = key;
-//     safe_printf("NM: Un-registering stale file '%s' from global map.\n", filename);
-//     void* stale_metadata = ts_hashmap_remove(args->file_metadata_map, filename);
-//     if (stale_metadata) {
-//         free(stale_metadata);
-//     }
-// }
-// Unused? ^
-
 // Helper to convert an int socket to a string key
 static void get_socket_key(int sock, char* key_buffer) {
     snprintf(key_buffer, 16, "%d", sock);
@@ -129,13 +117,13 @@ uint32_t register_ss(int sock, Payload_SSRegisterReq* payload, NameServerState* 
         return 0;
     }
     
-    new_ss->id = new_id; // <-- FIX: This member now exists
+    new_ss->id = new_id; 
     new_ss->socket_fd = sock;
     strncpy(new_ss->ip, payload->ip, MAX_IP_LEN - 1);
     new_ss->ip[MAX_IP_LEN - 1] = '\0';
-    new_ss->nm_port = payload->nm_port; // <-- FIX: This member now exists
+    new_ss->nm_port = payload->nm_port; 
     new_ss->client_port = payload->client_port;
-    new_ss->file_list = ts_hashmap_create(); // <-- FIX: This member now exists
+    new_ss->file_list = ts_hashmap_create(); 
     
     // 3. Add to maps
     // We store (id_string -> StorageServerInfo*)
@@ -146,25 +134,51 @@ uint32_t register_ss(int sock, Payload_SSRegisterReq* payload, NameServerState* 
     id_entry->id = new_id;
     char socket_key[16];
     get_socket_key(sock, socket_key);
-    ts_hashmap_put(state->socket_to_ss_id_map, socket_key, id_entry); // <-- FIX: Use new map
+    ts_hashmap_put(state->socket_to_ss_id_map, socket_key, id_entry); 
     
     safe_printf("NM: Registered SS from %s:%u as SS %u\n", new_ss->ip, new_ss->client_port, new_id);
     return new_id;
 }
 
 
+typedef struct {
+    NameServerState* state;
+    uint32_t failed_ss_id;
+} OrphanArgs;
+
+// This callback will be run for every file in the dead SS's file_list
 static void orphan_file_in_metadata_map_callback(const char* key, void* value, void* arg) {
-    NameServerState* state = (NameServerState*)arg;
+    OrphanArgs* args = (OrphanArgs*)arg;
+    NameServerState* state = args->state;
+    uint32_t failed_ss_id = args->failed_ss_id;
     const char* filename = key;
 
     FileMetadata* meta = ts_hashmap_get(state->file_metadata_map, filename);
     if (meta) {
-        // We found the metadata. Mark it as "orphaned" (no SS).
-        safe_printf("NM: File '%s' is now orphaned (was on SS %u)\n", 
-            filename, meta->ss_id);
-        meta->ss_id = 0; // Set to invalid ID
+        pthread_mutex_lock(&meta->meta_lock);
+        
+        if (meta->ss_replicas[0] == failed_ss_id) {
+            safe_printf("NM: File '%s' (Primary) is now orphaned (was on SS %u)\n", 
+                filename, failed_ss_id);
+            
+            // --- FAILOVER: Promote Secondary to Primary ---
+            if (meta->ss_replicas[1] != 0) {
+                safe_printf("NM: Promoting SS %u to Primary for file '%s'.\n",
+                    meta->ss_replicas[1], filename);
+                meta->ss_replicas[0] = meta->ss_replicas[1];
+                meta->ss_replicas[1] = 0;
+            } else {
+                meta->ss_replicas[0] = 0; // No secondary, file is fully orphaned
+            }
+            
+        } else if (meta->ss_replicas[1] == failed_ss_id) {
+            safe_printf("NM: File '%s' (Secondary) is now orphaned (was on SS %u)\n", 
+                filename, failed_ss_id);
+            meta->ss_replicas[1] = 0; // Just orphan the secondary
+        }
+        
+        pthread_mutex_unlock(&meta->meta_lock);
     }
-    // If meta is NULL, it was already deleted by a user, which is fine.
 }
 
 void handle_disconnect(int sock, NameServerState* state) {
@@ -209,9 +223,10 @@ void handle_disconnect(int sock, NameServerState* state) {
         StorageServerInfo* ss = ts_hashmap_remove(state->ss_map, ss_key);
         if (ss) {
             safe_printf("NM: Removed SS %u from state.\n", ss_id);
-
-            ts_hashmap_iterate(ss->file_list, orphan_file_in_metadata_map_callback, state);
-            
+            OrphanArgs args;
+            args.state = state;
+            args.failed_ss_id = ss_id;
+            ts_hashmap_iterate(ss->file_list, orphan_file_in_metadata_map_callback, &args);
             safe_printf("NM: Removed SS %u's files from state.\n", ss_id);
             ts_hashmap_destroy(ss->file_list, NULL); // file_list values are TBD
             free(ss);
@@ -228,4 +243,3 @@ void handle_disconnect(int sock, NameServerState* state) {
     close(sock);
     return;
 }
-

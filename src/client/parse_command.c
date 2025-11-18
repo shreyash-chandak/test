@@ -3,35 +3,46 @@
 #include "server_response.h"
 #include "common.h"  
 #include <ctype.h>
+#define TO_COL_END  "\033[67G"
 
 void print_help_menu(){
-    safe_printf("── CLI Docs Help Menu ──\n");
-    safe_printf("  view [-a] [-l]         : List files\n");
-    safe_printf("  read <file>            : Read file content\n");
-    safe_printf("  create <file>          : Create an empty file\n");
-    safe_printf("  write <file> <sent_num>: Write to a file (interactive)\n");
-    safe_printf("  undo <file>            : Revert last change to file\n");
-    safe_printf("  redo <file>            : Re-apply last undone change\n");
-    safe_printf("  info <file>            : Get file metadata\n");
-    safe_printf("  delete <file>          : Delete a file\n");
-    safe_printf("  stream <file>          : Stream file content\n");
-    safe_printf("  list                   : List all users\n");
-    safe_printf("  addaccess -R/-W <f> <u>: Grant access\n");
-    safe_printf("  remaccess <file> <user>: Revoke access\n");
-    safe_printf("  exec <file>            : Execute file as shell commands\n");
-    safe_printf("\n  ── Access Requests ──\n");
-    safe_printf("  reqaccess <file>       : Request access to a file\n");
-    safe_printf("  listreqs <file>        : (Owner) List pending requests\n");
-    safe_printf("  approve <f> <u> -R/-W  : (Owner) Approve a request\n");
-    safe_printf("  deny <file> <user>     : (Owner) Deny a request\n");
-    safe_printf("\n  ── General Commands ──\n");
-    safe_printf("  help                   : Show this help menu\n");
-    safe_printf("  clear                  : Clear the console\n");
-    safe_printf("  exit                   : Quit the application\n");
-    safe_printf("────────────────\n");
+    safe_printf(FG_CYAN"┌─────────────────────────────────────────────────────────────────┐\n"COLOR_RESET);
+    safe_printf(FG_CYAN"│                        Docs++ Help Menu                         │\n"COLOR_RESET);
+    safe_printf(FG_CYAN"├─────────────────────────────────────────────────────────────────┤\n"COLOR_RESET);
+    safe_printf(FG_CYAN"│"FG_GREEN"  view"FG_YELLOW" [-a] [-l]              "COLOR_RESET": List files"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  read"FG_YELLOW" <file>                 "COLOR_RESET": Read file content"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  create"FG_YELLOW" <file>               "COLOR_RESET": Create an empty file"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  write"FG_YELLOW" <file> <sent_num>     "COLOR_RESET": Write to a file (interactive)"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  undo"FG_YELLOW" <file>                 "COLOR_RESET": Revert last change to file"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  redo"FG_YELLOW" <file>                 "COLOR_RESET": Re-apply last undone change"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  info"FG_YELLOW" <file>                 "COLOR_RESET": Get file metadata"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  delete"FG_YELLOW" <file>               "COLOR_RESET": Delete a file"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  stream"FG_YELLOW" <file>               "COLOR_RESET": Stream file content"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  list                        "COLOR_RESET": List all users"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  addaccess"FG_YELLOW" -R/-W <f> <u>     "COLOR_RESET": Grant access"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  remaccess"FG_YELLOW" <file> <user>     "COLOR_RESET": Revoke access"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  exec"FG_YELLOW" <file>                 "COLOR_RESET": Execute file as shell commands"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│                                                                 │\n"COLOR_RESET);
+    safe_printf(FG_CYAN"│"FG_MAGENTA"  [Access Requests]"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  reqaccess"FG_YELLOW" <file>            "COLOR_RESET": Request access to a file"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  listreqs"FG_YELLOW" <file>             "COLOR_RESET": (Owner) List pending requests"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  approve"FG_YELLOW" <f> <u> -R/-W       "COLOR_RESET": (Owner) Approve a request"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  deny"FG_YELLOW" <file> <user>          "COLOR_RESET": (Owner) Deny a request"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│                                                                 │\n"COLOR_RESET);
+    safe_printf(FG_CYAN"│"FG_MAGENTA"  [Checkpoints]"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  checkpoint"FG_YELLOW" <file> <tag>     "COLOR_RESET": Create a checkpoint"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  revert"FG_YELLOW" <file> <tag>         "COLOR_RESET": Revert to a checkpoint"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  viewcheckpoint"FG_YELLOW" <file> <tag> "COLOR_RESET": View a checkpoint's content"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  listcheckpoints"FG_YELLOW" <file>      "COLOR_RESET": List all checkpoints for a file"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│                                                                 │\n"COLOR_RESET);
+    safe_printf(FG_CYAN"│"FG_MAGENTA"  [General Commands]"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  help                        "COLOR_RESET": Show this help menu"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  clear                       "COLOR_RESET": Clear the console"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"│"FG_GREEN"  exit                        "COLOR_RESET": Quit the application"TO_COL_END FG_CYAN"│\n");
+    safe_printf(FG_CYAN"└─────────────────────────────────────────────────────────────────┘\n"COLOR_RESET);
 }
 
-static void print_local_check(ParsedCommand* cmd) {
+void print_local_check(ParsedCommand* cmd) {
     safe_printf("────────LOCAL CHECK PASSED────────\n");
     
     switch(cmd->type) {
@@ -85,14 +96,26 @@ static void print_local_check(ParsedCommand* cmd) {
         case CMD_LISTREQS:
             safe_printf("  Command: LIST REQUESTS\n  File: %s\n", cmd->filename);
             break;
+        case CMD_CHECKPOINT:
+            safe_printf("  Command: CHECKPOINT\n  File: %s\n  Tag: %s\n", cmd->filename, cmd->tag);
+            break;
+        case CMD_REVERT:
+            safe_printf("  Command: REVERT\n  File: %s\n  Tag: %s\n", cmd->filename, cmd->tag);
+            break;
+        case CMD_VIEWCHECKPOINT:
+            safe_printf("  Command: VIEWCHECKPOINT\n  File: %s\n  Tag: %s\n", cmd->filename, cmd->tag);
+            break;
+        case CMD_LISTCHECKPOINTS:
+            safe_printf("  Command: LISTCHECKPOINTS\n  File: %s\n", cmd->filename);
+            break;
         case CMD_APPROVE:
             safe_printf("  Command: APPROVE REQUEST\n  File: %s\n  User: %s\n", cmd->filename, cmd->username);
             if (cmd->flag_r) safe_printf("  Flag: -R\n");
             if (cmd->flag_w) safe_printf("  Flag: -W\n");
             break;
-    case CMD_DENY:
-        safe_printf("  Command: DENY REQUEST\n  File: %s\n  User: %s\n", cmd->filename, cmd->username);
-        break;
+        case CMD_DENY:
+            safe_printf("  Command: DENY REQUEST\n  File: %s\n  User: %s\n", cmd->filename, cmd->username);
+            break;
         // These are handled by the REPL, but we include them for completeness
         case CMD_HELP:
             safe_printf("  Command: HELP\n");
@@ -113,7 +136,6 @@ static void print_local_check(ParsedCommand* cmd) {
 
 // ── Internal Function Prototypes ──
 static const char* local_validate_command(ParsedCommand* cmd);
-static void execute_command(ParsedCommand* cmd, int nm_socket);
 
 ParsedCommand parse_command(const char* input){
 
@@ -241,6 +263,25 @@ ParsedCommand parse_command(const char* input){
         if(token_count > 1) strncpy(cmd.filename, tokens[1], MAX_FILENAME_LEN - 1);
         if(token_count > 2) strncpy(cmd.username, tokens[2], MAX_USERNAME_LEN - 1);
     }
+    else if (strcmp(tokens[0], "checkpoint") == 0) {
+        cmd.type = CMD_CHECKPOINT;
+        if(token_count > 1) strncpy(cmd.filename, tokens[1], MAX_FILENAME_LEN - 1);
+        if(token_count > 2) strncpy(cmd.tag, tokens[2], MAX_FILENAME_LEN - 1);
+    }
+    else if (strcmp(tokens[0], "revert") == 0) {
+        cmd.type = CMD_REVERT;
+        if(token_count > 1) strncpy(cmd.filename, tokens[1], MAX_FILENAME_LEN - 1);
+        if(token_count > 2) strncpy(cmd.tag, tokens[2], MAX_FILENAME_LEN - 1);
+    }
+    else if (strcmp(tokens[0], "viewcheckpoint") == 0) {
+        cmd.type = CMD_VIEWCHECKPOINT;
+        if(token_count > 1) strncpy(cmd.filename, tokens[1], MAX_FILENAME_LEN - 1);
+        if(token_count > 2) strncpy(cmd.tag, tokens[2], MAX_FILENAME_LEN - 1);
+    }
+    else if (strcmp(tokens[0], "listcheckpoints") == 0) {
+        cmd.type = CMD_LISTCHECKPOINTS;
+        if(token_count > 1) strncpy(cmd.filename, tokens[1], MAX_FILENAME_LEN - 1);
+    }
     else if (strcmp(tokens[0], "exec") == 0){
         cmd.type = CMD_EXEC;
         if (token_count > 1)
@@ -343,6 +384,21 @@ static const char* local_validate_command(ParsedCommand* cmd) {
             if (strlen(cmd->filename) == 0) return ERR_MSG_FILENM;
             return NULL;
 
+        case CMD_LISTCHECKPOINTS:
+            if (strlen(cmd->filename) == 0) return ERR_MSG_FILENM;
+            return NULL; // Success
+    
+        case CMD_CHECKPOINT:
+        case CMD_REVERT:
+        case CMD_VIEWCHECKPOINT:
+            if (strlen(cmd->filename) == 0) return ERR_MSG_FILENM;
+            if (strlen(cmd->tag) == 0) return "Missing checkpoint tag argument.";
+            // Prevent using .bak or other problematic tags
+            if (strcmp(cmd->tag, "bak") == 0 || strchr(cmd->tag, '/') || strchr(cmd->tag, '\\')) {
+                return "Invalid tag name. Cannot be 'bak' or contain slashes.";
+            }
+            return NULL; // Success
+            
         case CMD_APPROVE:
             if (!cmd->flag_r && !cmd->flag_w) return "APPROVE requires '-R' or '-W' flag.";
             // Fallthrough to check args
@@ -370,197 +426,4 @@ void validate_and_send(ParsedCommand* cmd, int nm_socket) {
     
     // Validation passed, call the real network function
     execute_command(cmd, nm_socket);
-}
-
-
-static void execute_command(ParsedCommand* cmd, int nm_socket) {
-    
-    print_local_check(cmd);
-    
-    MsgHeader header = {0};
-    MsgPayload payload = {0};
-
-    // ── 1. Set Universal Header Fields ──
-    header.version = PROTOCOL_VERSION;
-    header.client_id = 0;
-    header.error = ERR_NONE;
-
-    // ── 2. Build Packet Based on Command Type ──
-    switch(cmd->type) {
-        
-        case CMD_VIEW:
-            header.opcode = OP_CLIENT_VIEW_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientViewReq);
-            if (cmd->flag_a) payload.client_view_req.flags |= VIEW_FLAG_A;
-            if (cmd->flag_l) payload.client_view_req.flags |= VIEW_FLAG_L;
-            break;
-            
-        case CMD_READ:
-            header.opcode = OP_CLIENT_READ_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_CREATE:
-            header.opcode = OP_CLIENT_CREATE_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_WRITE:
-            header.opcode = OP_CLIENT_WRITE_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientWriteReq);
-            strncpy(payload.write_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            payload.write_req.sentence_index = (uint32_t)atoi(cmd->sentence_num_str);
-            break;
-
-        case CMD_UNDO:
-            header.opcode = OP_CLIENT_UNDO_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_REDO:
-            header.opcode = OP_CLIENT_REDO_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_INFO:
-            header.opcode = OP_CLIENT_INFO_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_DELETE:
-            header.opcode = OP_CLIENT_DELETE_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_STREAM:
-            header.opcode = OP_CLIENT_STREAM_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_LIST:
-            header.opcode = OP_CLIENT_LIST_REQ;
-            header.length = sizeof(MsgHeader); // No payload
-            break;
-
-        case CMD_ADDACCESS:
-            header.opcode = OP_CLIENT_ACCESS_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientAccessReq);
-            strncpy(payload.access_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            strncpy(payload.access_req.username, cmd->username, MAX_USERNAME_LEN - 1);
-            if (cmd->flag_r) payload.access_req.flags |= ACCESS_FLAG_READ_ADD;
-            if (cmd->flag_w) payload.access_req.flags |= ACCESS_FLAG_WRITE_ADD;
-            break;
-
-        case CMD_REMACCESS:
-            header.opcode = OP_CLIENT_ACCESS_REQ; // Same opcode as ADD
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientAccessReq);
-            strncpy(payload.access_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            strncpy(payload.access_req.username, cmd->username, MAX_USERNAME_LEN - 1);
-            payload.access_req.flags = ACCESS_FLAG_REMOVE;
-            break;
-
-        case CMD_EXEC:
-            header.opcode = OP_CLIENT_EXEC_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-
-        case CMD_REQACCESS:
-            header.opcode = OP_CLIENT_REQACCESS_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-        case CMD_LISTREQS:
-            header.opcode = OP_CLIENT_LISTREQS_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
-            strncpy(payload.file_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            break;
-        case CMD_APPROVE:
-            header.opcode = OP_CLIENT_APPROVE_REQ;
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientAccessReq);
-            strncpy(payload.access_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            strncpy(payload.access_req.username, cmd->username, MAX_USERNAME_LEN - 1);
-            if (cmd->flag_r) payload.access_req.flags |= ACCESS_FLAG_READ_ADD;
-            if (cmd->flag_w) payload.access_req.flags |= ACCESS_FLAG_WRITE_ADD;
-            break;
-        case CMD_DENY:
-            header.opcode = OP_CLIENT_APPROVE_REQ; // Same opcode
-            header.length = sizeof(MsgHeader) + sizeof(Payload_ClientAccessReq);
-            strncpy(payload.access_req.filename, cmd->filename, MAX_FILENAME_LEN - 1);
-            strncpy(payload.access_req.username, cmd->username, MAX_USERNAME_LEN - 1);
-            payload.access_req.flags = ACCESS_FLAG_REMOVE;
-            break;
-
-        default:
-            safe_printf("[Internal Error] execute_command called with unhandled command type.\n");
-            return;
-    }
-    
-    if (send_message(nm_socket, &header, &payload) == -1) {
-        safe_printf("[Network Error] Failed to send command to Name Server.\n");
-        return;
-    }
-    // Note: This is a *blocking* call.
-    //safe_printf("DEBUG (Client): Sent request. Now waiting for first response from NM...\n");
-    
-    if (recv_message(nm_socket, &header, &payload) <= 0) {
-        safe_printf("[Network Error] Disconnected from Name Server. Exiting.\n");
-        close(nm_socket);
-        exit(EXIT_FAILURE); // <── This is the new, fatal action
-    }
-
-    // ── 5. Process the server's reply ──
-    handle_server_response(&header, &payload, cmd);
-    
-
-    // Special handling for EXEC, which sends multiple packets
-    // Special handling for EXEC, which sends multiple packets
-    if (header.opcode == OP_NM_CLIENT_EXEC_OUTPUT) {
-        
-        // The first line was already printed by handle_server_response.
-        // This loop will now print the rest of the output cleanly.
-        
-        while(1) {
-            if (recv_message(nm_socket, &header, &payload) <= 0) {
-                 safe_printf("[Network Error] Disconnected during EXEC output. Exiting.\n");
-                 close(nm_socket);
-                 exit(EXIT_FAILURE);
-            }
-            
-            // --- NEW LOGIC: We are now in control of printing ---
-            
-            if (header.opcode == OP_NM_CLIENT_EXEC_OUTPUT) {
-                // Just print the line, no headers/footers
-                size_t data_len = header.length - sizeof(MsgHeader);
-                payload.generic.buffer[data_len] = '\0';
-                safe_printf("  %s\n", payload.generic.buffer); // <-- REMOVED PREFIX
-                fflush(stdout);
-            }
-            else if (header.opcode == OP_NM_CLIENT_EXEC_END) {
-                // This packet is normally handled by handle_server_response,
-                // but we're in our own loop. Print the final message.
-                safe_printf("  [Execution Finished]\n");
-                safe_printf("────────────────\n"); // Manually print the *final* footer
-                break; // Exit the loop
-            } 
-            else if (header.error != ERR_NONE) {
-                // An error packet was received.
-                safe_printf("[Server Error] %s (Code: %d)\n", payload.error.message, header.error);
-                safe_printf("────────────────\n"); // Manually print the *final* footer
-                break; // Exit the loop
-            }
-            else {
-                safe_printf("[Internal Error] Unexpected packet %u during EXEC.\n", header.opcode);
-                break;
-            }
-            // --- END NEW LOGIC ---
-        }
-    }
 }

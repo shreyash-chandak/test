@@ -3,7 +3,7 @@
 #include "ss_structs.h"
 #include "common.h"
 #include "ss_file_ops.h"
-#include "ss_write_helpers.h" // <-- NEW INCLUDE
+#include "ss_write_helpers.h" 
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <ctype.h>
@@ -14,7 +14,6 @@
 void handle_nm_request(StorageServerState* state, int nm_sock, MsgHeader* header, MsgPayload* payload);
 void* handle_client_connection(void* arg);
 
-// -----------------------------------------------------------------
 
 // We need a helper struct to pass args to the handler thread
 typedef struct {
@@ -151,7 +150,6 @@ void* run_nm_client(void* arg) {
     req->ss_id = 0; // Fresh connection
     req->is_reconnect = 0;
     
-    // --- THIS IS THE FIX FROM LAST TIME ---
     // We get the public_ip from the state, which main() will set
     strncpy(req->ip, state->public_ip, MAX_IP_LEN - 1); 
     req->nm_port = 0; // Not needed
@@ -219,6 +217,7 @@ int main(int argc, char const *argv[]) {
     uint16_t client_port = (uint16_t)atoi(argv[5]);
 
     init_printf_mutex();
+    enable_logging_timestamps();
     
     // --- PASS NEW ARG TO INIT ---
     // This call is now valid because the prototype matches

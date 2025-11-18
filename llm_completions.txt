@@ -1,0 +1,11 @@
+Shreyash
+
+1. Gemini
+- https://gemini.google.com/share/347be3094c5b (foundation)
+- https://gemini.google.com/share/b2a9368c8817 (nm, ss logic with few commands)
+- https://gemini.google.com/share/24dd2ae400e3 (heavy lifting - upto commit 36)
+- https://gemini.google.com/share/d3220e38deb8 (heavy lifting - commit 37 onwards)
+
+
+2. ChatGPT
+- https://chatgpt.com/share/691a357f-0c74-800b-b7e9-29c356373d25 (foundation)

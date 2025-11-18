@@ -33,7 +33,7 @@ typedef struct {
 typedef struct {
     
     char filename[MAX_FILENAME_LEN];
-    uint32_t ss_id;
+    uint32_t ss_replicas[2];
     // Which SS has this file
     char owner_username[MAX_USERNAME_LEN];
     uint64_t file_size;

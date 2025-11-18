@@ -25,10 +25,15 @@ typedef enum {
     CMD_EXIT,
     CMD_EMPTY,
     CMD_CLEAR,
-    CMD_REQACCESS,  // <-- ADD THIS
-    CMD_LISTREQS,   // <-- ADD THIS
-    CMD_APPROVE,    // <-- ADD THIS
-    CMD_DENY       // <-- ADD THIS
+    CMD_REQACCESS,  
+    CMD_LISTREQS,   
+    CMD_APPROVE,    
+    CMD_DENY,
+    // --- CHECKPOINTS ---
+    CMD_CHECKPOINT,
+    CMD_VIEWCHECKPOINT,
+    CMD_REVERT,
+    CMD_LISTCHECKPOINTS
 } CommandType;
 
 // Holds the structured data from a parsed user command.
@@ -47,6 +52,7 @@ typedef struct {
     // Arguments
     char filename[MAX_FILENAME_LEN];
     char username[MAX_USERNAME_LEN];
+    char tag[MAX_FILENAME_LEN];
     char sentence_num_str[32]; 
     // Store as string for validation
 
@@ -59,5 +65,8 @@ ParsedCommand parse_command(const char* input);
 void validate_and_send(ParsedCommand* cmd, int nm_socket);
 
 void print_help_menu();
+
+void print_local_check(ParsedCommand* cmd);
+void execute_command(ParsedCommand* cmd, int nm_socket);
 
 #endif

@@ -7,8 +7,8 @@
 #include "nm_request_helpers.h"
 #include "nm_request_helpers2.h"
 #include "nm_persistence.h"
-#include "nm_bonus.h"
-#include "lru_cache.h" // <-- ADD THIS INCLUDE
+#include "nm_access.h"
+#include "lru_cache.h" 
 
 /**
  * @brief Gets file metadata, using the LRU cache.
@@ -41,6 +41,11 @@ void* handle_connection(void* arg) {
     MsgPayload payload;
     uint32_t id = 0; 
     
+    // --- Get Peer Info for Logging ---
+    char client_ip[INET_ADDRSTRLEN];
+    uint16_t client_port;
+    get_peer_info(sock, client_ip, sizeof(client_ip), &client_port);
+
     if (recv_message(sock, &header, &payload) <= 0) {
         safe_printf("NM: Connection %d disconnected before registration.\n", sock);
         close(sock);
@@ -57,17 +62,20 @@ void* handle_connection(void* arg) {
             MsgPayload res_payload = {0};
             ErrorCode err_code = ERR_NONE; // This will be an [out] parameter
 
-            // --- CRITICAL FIX: Sanitize input strings ---
+            // --- Sanitize input strings ---
             payload.client_reg_req.username[MAX_USERNAME_LEN - 1] = '\0';
             payload.client_reg_req.password[MAX_PASSWORD_LEN - 1] = '\0';
             payload.client_reg_req.username[strcspn(payload.client_reg_req.username, "\r\n")] = 0;
             payload.client_reg_req.password[strcspn(payload.client_reg_req.password, "\r\n")] = 0;
+
+            safe_printf("NM: Registering Client [%s:%u] as '%s'...\n", 
+                        client_ip, client_port, payload.client_reg_req.username);
             
-            // --- UPDATED CALL: Pass the err_code pointer ---
+            // --- Pass the err_code pointer ---
             id = register_client(sock, &payload.client_reg_req, state, &err_code);
             
             if (id == 0) {
-                // --- FAILURE PATH: Send specific error ---
+                // --- Send specific error ---
                 safe_printf("NM: Client registration failed for socket %d (Error: %d).\n", sock, err_code);
                 
                 res_header.version = PROTOCOL_VERSION;
@@ -114,7 +122,6 @@ void* handle_connection(void* arg) {
             id = register_ss(sock, &payload.ss_reg_req, state);
             if (id == 0) {
                 safe_printf("NM: SS registration failed for socket %d.\n", sock);
-                // TODO: Send OP_ERROR_RES
                 close(sock);
                 return NULL;
             }
@@ -135,13 +142,12 @@ void* handle_connection(void* arg) {
         
         default:
             safe_printf("NM: Connection %d sent invalid first opcode %u. Closing.\n", sock, header.opcode);
-            // TODO: Send OP_ERROR_RES
             close(sock);
             return NULL;
     }
     
     // 3. --- If registration was successful, enter the main request loop ---
-    safe_printf("NM: Connection %d successfully registered. Entering main loop.\n", sock);
+    safe_printf("NM: Session established with ID %u (%s:%u).\n", id, client_ip, client_port);
 
     // This `id` is the client_id or ss_id
     bool is_client = (header.opcode == OP_CLIENT_REGISTER_REQ);
@@ -166,7 +172,7 @@ void* handle_connection(void* arg) {
     }
 
     // 4. --- Handle disconnect ---
-    safe_printf("NM: ID %u on socket %d disconnected.\n", id, sock);
+    safe_printf("NM: ID %u (%s:%u) disconnected.\n", id, client_ip, client_port);
     handle_disconnect(sock, state);
     return NULL;
 }
@@ -177,7 +183,13 @@ void* handle_connection(void* arg) {
 void route_client_request(uint32_t client_id, int sock, MsgHeader* header, 
                           MsgPayload* payload, NameServerState* state) {
 
-    safe_printf("NM: Routing CLIENT opcode %u from client %u\n", header->opcode, client_id);
+    const char* username = get_username_from_id(state, client_id);
+    char ip[INET_ADDRSTRLEN];
+    uint16_t port;
+    get_peer_info(sock, ip, sizeof(ip), &port);
+
+    safe_printf("NM: REQ from User '%s' (ID %u) [%s:%u] -> OpCode %u\n", 
+                username ? username : "Unknown", client_id, ip, port, header->opcode);
 
     switch (header->opcode) {
         // --- P2: NM-Handled Features ---
@@ -354,9 +366,20 @@ void route_client_request(uint32_t client_id, int sock, MsgHeader* header,
         case OP_CLIENT_WRITE_REQ:
         case OP_CLIENT_STREAM_REQ:
         case OP_CLIENT_UNDO_REQ: 
-        case OP_CLIENT_REDO_REQ: {
+        case OP_CLIENT_REDO_REQ:
+        case OP_CLIENT_CHECKPOINT_REQ:
+        case OP_CLIENT_REVERT_REQ:
+        case OP_CLIENT_VIEWCHECKPOINT_REQ:
+        case OP_CLIENT_LISTCHECKPOINTS_REQ: {
 
-            Payload_FileRequest* req = &payload->file_req;
+            Payload_FileRequest* req;
+            if (header->opcode == OP_CLIENT_CHECKPOINT_REQ || header->opcode == OP_CLIENT_REVERT_REQ || header->opcode == OP_CLIENT_VIEWCHECKPOINT_REQ) {
+                // These commands use the *new* payload struct
+                req = (Payload_FileRequest*)&payload->checkpoint_req; 
+            } else {
+                // These commands use the original payload struct
+                req = &payload->file_req;
+            }
 
             // 2. Get parameters: meta and username
             FileMetadata* meta = get_metadata_with_cache(state, req->filename); 
@@ -375,7 +398,11 @@ void route_client_request(uint32_t client_id, int sock, MsgHeader* header,
             // 4. Get parameters: required_level and err_msg
             PermissionLevel required_perm;
             const char* err_msg;
-            bool is_write_op = (header->opcode == OP_CLIENT_WRITE_REQ || header->opcode == OP_CLIENT_UNDO_REQ);
+            bool is_write_op = (header->opcode == OP_CLIENT_WRITE_REQ || 
+                                header->opcode == OP_CLIENT_UNDO_REQ || 
+                                header->opcode == OP_CLIENT_REDO_REQ ||
+                                header->opcode == OP_CLIENT_CHECKPOINT_REQ ||
+                                header->opcode == OP_CLIENT_REVERT_REQ);
 
             if (is_write_op) {
                 required_perm = PERM_WRITE;
@@ -405,64 +432,10 @@ void route_client_request(uint32_t client_id, int sock, MsgHeader* header,
             break;
 
         default:
-            safe_printf("NM: Unknown opcode %u from client %u. Ignoring.\n", header->opcode, client_id);
-            // TODO: Send ERR_INVALID_COMMAND
+            safe_printf("NM: Unknown opcode %u from client %u.\n", header->opcode, client_id);
+            send_nm_error(sock, ERR_INVALID_COMMAND, "Unknown command opcode.");
             break;
     }
-}
-
-static void handle_ss_undo_complete(uint32_t ss_id, Payload_SSNMUndoComplete* payload, NameServerState* state) {
-
-    FileMetadata* meta = (FileMetadata*)ts_hashmap_get(state->file_metadata_map, payload->filename); 
-
-    if (meta == NULL) {
-        safe_printf("NM: Received UNDO_COMPLETE for unknown file '%s' from SS %u\n", payload->filename, ss_id);
-        return;
-    }
-    safe_printf("NM: Received UNDO_COMPLETE for file '%s' from SS %u\n", payload->filename, ss_id);
-    pthread_mutex_lock(&meta->meta_lock);
-
-    time_t now = time(NULL);
-
-    // --- FIX: Log the UNDO operation ---
-    persistence_log_op("META,UNDO,%s,%ld,%llu\n",
-                       meta->filename,
-                       (long)now,
-                       (unsigned long long)payload->new_file_size); 
-
-    // An UNDO is a write operation, so update all metadata
-    meta->modified_at = (uint64_t)now;
-    meta->accessed_at = (uint64_t)now;
-    meta->file_size = payload->new_file_size;
-
-    pthread_mutex_unlock(&meta->meta_lock);
-}
-
-static void handle_ss_redo_complete(uint32_t ss_id, Payload_SSNMRedoComplete* payload, NameServerState* state) {
-
-    FileMetadata* meta = (FileMetadata*)ts_hashmap_get(state->file_metadata_map, payload->filename); 
-
-    if (meta == NULL) {
-        safe_printf("NM: Received REDO_COMPLETE for unknown file '%s' from SS %u\n", payload->filename, ss_id);
-        return;
-    }
-    safe_printf("NM: Received REDO_COMPLETE for file '%s' from SS %u\n", payload->filename, ss_id);
-    pthread_mutex_lock(&meta->meta_lock);
-
-    time_t now = time(NULL);
-
-    // --- Log the REDO operation ---
-    persistence_log_op("META,REDO,%s,%ld,%llu", // <-- Note the new log type
-                       meta->filename,
-                       (long)now,
-                       (unsigned long long)payload->new_file_size); 
-
-    // A REDO is a write operation, so update all metadata
-    meta->modified_at = (uint64_t)now;
-    meta->accessed_at = (uint64_t)now;
-    meta->file_size = payload->new_file_size;
-
-    pthread_mutex_unlock(&meta->meta_lock);
 }
 
 // Main router for all opcodes from a registered SS.
@@ -470,7 +443,11 @@ static void handle_ss_redo_complete(uint32_t ss_id, Payload_SSNMRedoComplete* pa
 void route_ss_request(uint32_t ss_id, int sock, MsgHeader* header, 
                       MsgPayload* payload, NameServerState* state){
 
-    safe_printf("NM: Routing SS opcode %u from SS %u\n", header->opcode, ss_id);
+    char ip[INET_ADDRSTRLEN];
+    uint16_t port;
+    get_peer_info(sock, ip, sizeof(ip), &port);
+    
+    safe_printf("NM: REQ from SS %u [%s:%u] -> OpCode %u\n", ss_id, ip, port, header->opcode);
 
     switch(header->opcode) {
         case OP_SS_SYNC_FILE_INFO:
@@ -485,17 +462,16 @@ void route_ss_request(uint32_t ss_id, int sock, MsgHeader* header,
             handle_ss_redo_complete(ss_id, &payload->redo_complete, state);
             break;
             
+        case OP_SS_NM_REVERT_COMPLETE:
+            handle_ss_revert_complete(ss_id, &payload->revert_complete, state);
+            break;
+            
         case OP_SS_NM_WRITE_COMPLETE:
             handle_ss_write_complete(ss_id, &payload->write_complete, state);
             break;
 
         case OP_HEARTBEAT_PONG:
             // TODO: handle_ss_pong(ss_id, state);
-            break;
-
-        // --- Responses to NM-issued commands ---
-        case OP_SS_NM_INTERNAL_READ_RES:
-            // TODO: handle_exec_ss_response(ss_id, sock, header, &payload->file_chunk, state);
             break;
 
         default:

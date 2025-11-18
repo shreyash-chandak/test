@@ -142,7 +142,6 @@ void* ts_hashmap_remove(TSHashMap* map, const char* key) {
     return value;
 }
 
-// --- NEW FUNCTION ---
 void ts_hashmap_iterate(TSHashMap* map, 
                         void (*callback)(const char* key, void* value, void* arg), 
                         void* arg) {

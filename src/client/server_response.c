@@ -104,7 +104,6 @@ static void handle_ss_read_loop(int ss_socket) {
         }
 
         if (payload.file_chunk.is_last_chunk) {
-            // We're done.
             if (total_bytes == 0 && payload.file_chunk.file_size == 0) {
                 safe_printf("  [File is empty]\n");
             } else {
@@ -197,11 +196,8 @@ static void handle_ss_write_loop(int ss_socket) {
         }
         
         safe_printf("  [Data sent.]\n");
-        // No response is expected from WRITE_DATA
     }
 }
-
-// 3 way handshake
 
 static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* original_cmd) {
     safe_printf("  [Redirecting to Storage Server at %s:%u...]\n",
@@ -269,6 +265,29 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
             ss_header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
             strncpy(ss_payload.file_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
             break;
+        case CMD_CHECKPOINT:
+            ss_header.opcode = OP_CLIENT_SS_CHECKPOINT_REQ;
+            ss_header.length = sizeof(MsgHeader) + sizeof(Payload_CheckpointRequest);
+            strncpy(ss_payload.checkpoint_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
+            strncpy(ss_payload.checkpoint_req.tag, original_cmd->tag, MAX_FILENAME_LEN - 1);
+            break;
+        case CMD_REVERT:
+            ss_header.opcode = OP_CLIENT_SS_REVERT_REQ;
+            ss_header.length = sizeof(MsgHeader) + sizeof(Payload_CheckpointRequest);
+            strncpy(ss_payload.checkpoint_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
+            strncpy(ss_payload.checkpoint_req.tag, original_cmd->tag, MAX_FILENAME_LEN - 1);
+            break;
+        case CMD_VIEWCHECKPOINT:
+            ss_header.opcode = OP_CLIENT_SS_VIEWCHECKPOINT_REQ;
+            ss_header.length = sizeof(MsgHeader) + sizeof(Payload_CheckpointRequest);
+            strncpy(ss_payload.checkpoint_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
+            strncpy(ss_payload.checkpoint_req.tag, original_cmd->tag, MAX_FILENAME_LEN - 1);
+            break;
+        case CMD_LISTCHECKPOINTS:
+            ss_header.opcode = OP_CLIENT_SS_LISTCHECKPOINTS_REQ;
+            ss_header.length = sizeof(MsgHeader) + sizeof(Payload_FileRequest);
+            strncpy(ss_payload.file_req.filename, original_cmd->filename, MAX_FILENAME_LEN - 1);
+            break;
         default:
             safe_printf("[Internal Error] Redirect for unknown command type.\n");
             close(ss_socket);
@@ -325,7 +344,42 @@ static void handle_ss_redirect(Payload_SSRedirect* redirect, ParsedCommand* orig
                 safe_printf("  [Redo Successful.]\n");
             }
             break; // Done, close socket
-        
+        case CMD_CHECKPOINT:
+            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
+                safe_printf("[Error] Disconnected from SS during CHECKPOINT.\n");
+            } else if (ss_header.error != ERR_NONE) {
+                safe_printf("[SS Error] %s\n", ss_payload.error.message);
+            } else {
+                safe_printf("  [Checkpoint Successful.]\n");
+            }
+            break; // Done
+
+        case CMD_REVERT:
+            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
+                safe_printf("[Error] Disconnected from SS during REVERT.\n");
+            } else if (ss_header.error != ERR_NONE) {
+                safe_printf("[SS Error] %s\n", ss_payload.error.message);
+            } else {
+                safe_printf("  [Revert Successful.]\n");
+            }
+            break; // Done
+
+        case CMD_VIEWCHECKPOINT:
+            // This re-uses the same logic as READ
+            handle_ss_read_loop(ss_socket);
+            break;
+
+        case CMD_LISTCHECKPOINTS:
+            // This receives a single generic buffer, just like VIEW from the NM
+            if (recv_message(ss_socket, &ss_header, &ss_payload) <= 0) {
+                safe_printf("[Error] Disconnected from SS during LISTCHECKPOINTS.\n");
+            } else if (ss_header.error != ERR_NONE) {
+                safe_printf("[SS Error] %s\n", ss_payload.error.message);
+            } else {
+                // Print the buffer from the SS
+                print_generic_response(&ss_payload);
+            }
+            break;
         default:
             safe_printf("[Internal Error] Redirect for unknown command type.\n");
              break;
@@ -370,6 +424,10 @@ void handle_server_response(MsgHeader* header, MsgPayload* payload, ParsedComman
         case OP_NM_STREAM_RES:
         case OP_NM_UNDO_RES:
         case OP_NM_REDO_RES:
+        case OP_NM_CHECKPOINT_RES:
+        case OP_NM_REVERT_RES:
+        case OP_NM_VIEWCHECKPOINT_RES:
+        case OP_NM_LISTCHECKPOINTS_RES:
             handle_ss_redirect(&payload->redirect, original_cmd);
             break;
         

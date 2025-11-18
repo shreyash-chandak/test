@@ -17,6 +17,8 @@ void safe_printf(const char* format, ...);
 
 // --- Networking Functions ---
 
+void enable_logging_timestamps();
+void get_peer_info(int sock, char* ip_buf, size_t ip_len, uint16_t* port);
 int send_message(int sock, MsgHeader* header, MsgPayload* payload);
 int recv_message(int sock, MsgHeader* header, MsgPayload* payload);
 uint32_t compute_checksum(const void* data, size_t length);
@@ -31,9 +33,14 @@ const char* get_username_from_id(NameServerState* state, uint32_t client_id);
 
 
 // ANSI Color Codes (cause why not)
-#define COLOR_RESET "\033[0m"
-#define BRIGHTBLUE "\033[94m"
-#define LIGHTRED "\033[91m"
-#define YELLOW "\033[93m"
+#define COLOR_RESET  "\033[0m"
+#define BRIGHTBLUE   "\033[94m"
+#define LIGHTRED     "\033[91m"
+#define YELLOW       "\033[93m"
+#define FG_CYAN      "\033[96m" // Headers
+#define FG_GREEN     "\033[92m" // Commands
+#define FG_YELLOW    "\033[93m" // Arguments
+#define FG_MAGENTA   "\033[95m" // Special/Bonus
+#define FG_GRAY      "\033[90m" // Borders/Subtle
 
 #endif

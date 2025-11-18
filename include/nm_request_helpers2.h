@@ -21,4 +21,13 @@ void handle_ss_write_complete(uint32_t ss_id, Payload_SSNMWriteComplete* payload
 
 void handle_exec(uint32_t client_id, int sock, Payload_FileRequest* payload, NameServerState* state);
 
+void handle_ss_undo_complete(uint32_t ss_id, Payload_SSNMUndoComplete* payload, 
+                             NameServerState* state);
+
+void handle_ss_redo_complete(uint32_t ss_id, Payload_SSNMRedoComplete* payload, 
+                             NameServerState* state);
+
+void handle_ss_revert_complete(uint32_t ss_id, Payload_SSNMRevertComplete* payload, 
+                               NameServerState* state);
+
 #endif // NM_REQUEST_HELPERS2_H

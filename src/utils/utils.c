@@ -3,12 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdarg.h>     // For va_list, va_start, va_end
-#include <netinet/in.h> // For htonl, ntohl
-#include <sys/socket.h> // For send/recv
+#include <stdarg.h>     // For va_list
+#include <netinet/in.h> // For sockaddr_in
+#include <sys/socket.h> // For getpeername
+#include <arpa/inet.h>  // For inet_ntop
+#include <time.h>       // For time, localtime
 
 // --- Global printf mutex ---
 static pthread_mutex_t printf_mutex;
+static bool g_log_timestamps = false;
 
 void init_printf_mutex() {
     pthread_mutex_init(&printf_mutex, NULL);
@@ -18,17 +21,45 @@ void destroy_printf_mutex() {
     pthread_mutex_destroy(&printf_mutex);
 }
 
-// Thread-safe printf
+void enable_logging_timestamps() {
+    g_log_timestamps = true;
+}
+
+// Thread-safe printf with TIMESTAMP
 void safe_printf(const char* format, ...) {
     pthread_mutex_lock(&printf_mutex);
+    
+    // 1. Get and print timestamp conditionally
+    if (g_log_timestamps) {
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        printf("[%02d:%02d:%02d] ", t->tm_hour, t->tm_min, t->tm_sec);
+    }
+
+    // 2. Print user message
     va_list args;
     va_start(args, format);
     vprintf(format, args);
     va_end(args);
-    fflush(stdout); // Ensure it prints immediately
+    
+    fflush(stdout); 
     pthread_mutex_unlock(&printf_mutex);
 }
 
+// --- New Helper: Get IP/Port from Socket ---
+void get_peer_info(int sock, char* ip_buf, size_t ip_len, uint16_t* port) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    
+    if (getpeername(sock, (struct sockaddr*)&addr, &len) == -1) {
+        strncpy(ip_buf, "?.?.?.?", ip_len);
+        *port = 0;
+        return;
+    }
+    
+    inet_ntop(AF_INET, &addr.sin_addr, ip_buf, ip_len);
+    *port = ntohs(addr.sin_port);
+}
 
 // --- Checksum ---
 uint32_t compute_checksum(const void* data, size_t length) {
@@ -97,7 +128,7 @@ void send_nm_error_response(int sock, uint32_t client_id, OpCode original_opcode
     res_header.version = PROTOCOL_VERSION;
     res_header.opcode = OP_ERROR_RES;
     res_header.length = sizeof(MsgHeader) + sizeof(Payload_Error); 
-    res_header.client_id = client_id; // <-- Use the client_id
+    res_header.client_id = client_id; 
     res_header.error = error;
     
     strncpy(res_payload.error.message, message, MAX_ERROR_MSG_LEN - 1);

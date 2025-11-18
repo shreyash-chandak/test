@@ -43,21 +43,24 @@ void* handle_client_connection(void* arg) {
     StorageServerState* state = args->state;
     free(arg);
 
-    safe_printf("SS: Handling new client connection on socket %d\n", sock);
+    char ip[INET_ADDRSTRLEN];
+    uint16_t port;
+    get_peer_info(sock, ip, sizeof(ip), &port);
+
+    safe_printf("SS: New connection from [%s:%u] on socket %d\n", ip, port, sock);
 
     MsgHeader header;
     MsgPayload payload;
     WriteSession* write_session = NULL; 
 
-    // 1. Receive the *first* packet
     if (recv_message(sock, &header, &payload) <= 0) {
-        safe_printf("SS: Client on socket %d disconnected before first command.\n", sock);
+        safe_printf("SS: [%s:%u] disconnected before first command.\n", ip, port);
         close(sock);
         return NULL;
     }
 
-    safe_printf("SS %u: Received command %u from a client on socket %d\n", 
-        state->ss_id, header.opcode, sock);
+    safe_printf("SS %u: Command %u from Client ID %u [%s:%u]\n", 
+        state->ss_id, header.opcode, header.client_id, ip, port);
 
     // 2. Route the *first* command
     switch (header.opcode) {
@@ -78,6 +81,30 @@ void* handle_client_connection(void* arg) {
             handle_ss_redo(state, sock, &payload.file_req);
             return NULL; // Handler closes socket
         
+        case OP_CLIENT_SS_CHECKPOINT_REQ:
+            handle_ss_checkpoint(state, sock, &payload.checkpoint_req);
+            return NULL; // Handler closes socket
+
+        case OP_CLIENT_SS_REVERT_REQ:
+            handle_ss_revert(state, sock, &payload.checkpoint_req);
+            return NULL; // Handler closes socket
+
+        case OP_CLIENT_SS_VIEWCHECKPOINT_REQ:
+            handle_ss_viewcheckpoint(state, sock, &payload.checkpoint_req);
+            return NULL; // Handler closes socket
+
+        case OP_CLIENT_SS_LISTCHECKPOINTS_REQ:
+            handle_ss_listcheckpoints(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket    
+
+        case OP_NM_SS_REPLICATE_REQ:
+            handle_nm_ss_replicate(state, sock, &payload.replicate_req);
+            return NULL; // Handler closes socket
+
+        case OP_SS_SS_REPLICATE_READ_REQ:
+            handle_ss_replicate_read(state, sock, &payload.file_req);
+            return NULL; // Handler closes socket
+            
         case OP_CLIENT_SS_READ_REQ:
             handle_ss_read(state, sock, &payload.file_req);
             return NULL; // Handler closes socket
@@ -133,9 +160,9 @@ void* handle_client_connection(void* arg) {
                     send_ss_error(sock, ERR_WRITE_FAILED, "Failed to commit changes to file.");
                 }
                 
-                safe_printf("SS: ETIRW complete. Closing connection %d\n", sock);
+                safe_printf("SS: ETIRW complete for [%s:%u].\n", ip, port);
                 close(sock);
-                return NULL; 
+                return NULL;
                 
             default:
                 safe_printf("SS: Received invalid opcode %u during WRITE session.\n", header.opcode);
